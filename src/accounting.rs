@@ -41,3 +41,4 @@ pub fn calculate_available_liquid_balance(
 ) -> u128 {
     protected_balance_yocto.saturating_sub(pending_reserved_yocto)
 }
+

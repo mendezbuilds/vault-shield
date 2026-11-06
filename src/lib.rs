@@ -593,7 +593,7 @@ impl VaultContract {
                 now,
                 request_id,
                 AuditEventType::PaymentPolicyInvalidated,
-                self.owner_id.clone(),
+                request.agent_id.clone(),
                 request.amount,
                 reason as u8,
             );

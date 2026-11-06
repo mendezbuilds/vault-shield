@@ -79,3 +79,4 @@ impl SpendingPolicy {
         }
     }
 }
+

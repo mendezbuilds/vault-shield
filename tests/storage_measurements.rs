@@ -47,12 +47,94 @@ fn test_measure_maximum_length_request_record() {
 
 #[test]
 fn test_measure_denial_and_invalidation_events() {
-    // Denial and invalidation events are emitted via NEP-297 env::log_str
-    // They do NOT persist state records to the storage trie.
-    println!("\n=== STORAGE MEASUREMENT: DENIAL AND INVALIDATION EVENTS ===");
-    println!("Storage growth on denial: 0 bytes (stateless event emission)");
-    println!("Storage growth on invalidation: 0 bytes (record updated or removed)");
-    assert_eq!(0, 0);
+    let max_agent = max_account_id();
+    let mut buffer = AuditBuffer::new();
+
+    // 1. Initial Empty Ring
+    let initial_serialized = borsh::to_vec(&buffer).expect("Serialization failed");
+    let key_overhead = 1; // b"a" prefix
+    let initial_size = initial_serialized.len() + key_overhead;
+
+    println!("\n=== STORAGE MEASUREMENT: DENIAL AND INVALIDATION IN AUDIT RING ===");
+    println!("1. Empty Audit Ring (50 None slots): {} bytes", initial_size);
+    assert_eq!(initial_size, 63);
+
+    // 2. Initial Population: Append Policy Denial
+    buffer.append(
+        1_000_000_000,
+        0, // unindexed request id for denials
+        AuditEventType::PaymentPolicyDenied,
+        max_agent.clone(),
+        NearToken::from_near(25),
+        3, // PolicyDenialReason code
+    );
+    let after_denial = borsh::to_vec(&buffer).expect("Serialization failed").len() + key_overhead;
+    let denial_delta = after_denial - initial_size;
+    println!("2. After 1st record (Policy Denial): {} bytes (growth: +{} bytes)", after_denial, denial_delta);
+    assert_eq!(denial_delta, 110, "First denial replaces 1-byte None with 111-byte Some");
+
+    // 3. Initial Population: Append Policy Invalidation
+    buffer.append(
+        1_000_000_001,
+        1, // request id for invalidation
+        AuditEventType::PaymentPolicyInvalidated,
+        max_agent.clone(),
+        NearToken::from_near(8),
+        2, // InvalidationReason code
+    );
+    let after_invalidation = borsh::to_vec(&buffer).expect("Serialization failed").len() + key_overhead;
+    let invalidation_delta = after_invalidation - after_denial;
+    println!("3. After 2nd record (Policy Invalidation): {} bytes (growth: +{} bytes)", after_invalidation, invalidation_delta);
+    assert_eq!(invalidation_delta, 110, "Second record replaces 1-byte None with 111-byte Some");
+
+    // 4. Fill remaining 48 slots to capacity (Full Ring)
+    for i in 2..AUDIT_BUFFER_CAPACITY {
+        buffer.append(
+            1_000_000_000 + i as u64,
+            i as u64,
+            AuditEventType::PaymentDispatched,
+            max_agent.clone(),
+            NearToken::from_near(5),
+            0,
+        );
+    }
+    let full_size = borsh::to_vec(&buffer).expect("Serialization failed").len() + key_overhead;
+    println!("4. Full Audit Ring (50 records): {} bytes (total initial growth: +{} bytes)", full_size, full_size - initial_size);
+    assert_eq!(full_size, 5563);
+    assert_eq!(full_size - initial_size, 5500);
+
+    // 5. Writes After Ring is Full: FIFO Overwrite with Policy Denial (slot 0)
+    buffer.append(
+        2_000_000_000,
+        0,
+        AuditEventType::PaymentPolicyDenied,
+        max_agent.clone(),
+        NearToken::from_near(50),
+        4,
+    );
+    let after_denial_overwrite = borsh::to_vec(&buffer).expect("Serialization failed").len() + key_overhead;
+    let denial_overwrite_delta = after_denial_overwrite as i64 - full_size as i64;
+    println!("5. Overwrite with Policy Denial (record 51 -> slot 0): {} bytes (net growth: {} bytes)", after_denial_overwrite, denial_overwrite_delta);
+    assert_eq!(denial_overwrite_delta, 0, "Overwriting existing record results in 0 net storage growth");
+
+    // 6. Writes After Ring is Full: FIFO Overwrite with Policy Invalidation (slot 1)
+    buffer.append(
+        2_000_000_001,
+        2,
+        AuditEventType::PaymentPolicyInvalidated,
+        max_agent.clone(),
+        NearToken::from_near(15),
+        1,
+    );
+    let after_invalidation_overwrite = borsh::to_vec(&buffer).expect("Serialization failed").len() + key_overhead;
+    let invalidation_overwrite_delta = after_invalidation_overwrite as i64 - after_denial_overwrite as i64;
+    println!("6. Overwrite with Policy Invalidation (record 52 -> slot 1): {} bytes (net growth: {} bytes)", after_invalidation_overwrite, invalidation_overwrite_delta);
+    assert_eq!(invalidation_overwrite_delta, 0, "Overwriting existing record results in 0 net storage growth");
+
+    // 7. Safety buffer verification
+    let safety_buffer = 10_000usize;
+    println!("7. Safety Reserve: {} bytes | Max Audit Footprint: {} bytes | Headroom: {} bytes (44.37%)", safety_buffer, full_size, safety_buffer - full_size);
+    assert!(full_size <= safety_buffer, "Full audit ring must safely fit inside storage safety buffer");
 }
 
 #[test]

@@ -177,3 +177,4 @@ pub struct ReconciledTombstoneView {
     pub reconciled_at: u64,
     pub evidence_tx_hash: String,
 }
+

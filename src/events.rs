@@ -342,3 +342,4 @@ pub struct TombstonePrunedData<'a> {
 pub fn emit_tombstone_pruned(request_id: u64, evidence: &str) {
     emit_event("tombstone_pruned", &TombstonePrunedData { request_id, evidence });
 }
+

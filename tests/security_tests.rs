@@ -481,3 +481,108 @@ fn test_sp12_audit_events_and_sequence_ids() {
         assert_eq!(records[i].sequence_id, records[i - 1].sequence_id + 1);
     }
 }
+
+// -----------------------------------------------------------------------------
+// Security Promise 12b: Persistent audit ring records for policy denials
+// -----------------------------------------------------------------------------
+#[test]
+fn test_audit_records_policy_denial_persistence() {
+    let (mut contract, mut ctx) = setup_vault();
+
+    ctx.predecessor_account_id(agent1());
+    testing_env!(ctx.build());
+
+    let initial_records = contract.get_audit_records(None, None);
+    let initial_count = initial_records.len();
+
+    // Agent attempts 25 NEAR payment (max_per_tx is 10 NEAR) -> Denied
+    let res = contract.request_payment(
+        merchant(),
+        NearToken::from_near(25),
+        "exceeds per tx".to_string(),
+        None,
+    );
+    assert_eq!(
+        res,
+        ExecutionResult::Denied {
+            reason: PolicyDenialReason::ExceedsPerTransactionCap
+        }
+    );
+
+    // 1. Must NOT create persistent request struct or reservation
+    assert!(contract.get_request(0).is_none());
+    assert_eq!(contract.get_pending_reserved(), NearToken::from_yoctonear(0));
+    assert_eq!(contract.get_global_pending_count(), 0);
+
+    // 2. Must record denial in persistent audit ring
+    let records = contract.get_audit_records(None, None);
+    assert_eq!(records.len(), initial_count + 1);
+
+    let last_record = records.last().unwrap();
+    assert_eq!(last_record.event_type, vault_contract::audit::AuditEventType::PaymentPolicyDenied);
+    assert_eq!(last_record.request_id, 0); // 0 for unindexed denials
+    assert_eq!(last_record.account_id, agent1());
+    assert_eq!(last_record.amount, NearToken::from_near(25));
+    assert_eq!(last_record.code, PolicyDenialReason::ExceedsPerTransactionCap as u8);
+    assert_eq!(last_record.sequence_id, initial_count as u64 + 1);
+}
+
+// -----------------------------------------------------------------------------
+// Security Promise 12c: Persistent audit ring records for policy invalidations
+// -----------------------------------------------------------------------------
+#[test]
+fn test_audit_records_policy_invalidation_persistence() {
+    let (mut contract, mut ctx) = setup_vault();
+
+    // Agent queues pending request (amount 8 NEAR > 5 NEAR threshold)
+    ctx.predecessor_account_id(agent1());
+    testing_env!(ctx.build());
+    let res = contract.request_payment(
+        merchant(),
+        NearToken::from_near(8),
+        "pending request".to_string(),
+        None,
+    );
+    let req_id = match res {
+        ExecutionResult::Pending { request_id, .. } => request_id,
+        _ => panic!("Expected Pending"),
+    };
+
+    assert_eq!(contract.get_pending_reserved(), NearToken::from_near(8));
+    assert_eq!(contract.get_global_pending_count(), 1);
+
+    // Owner revokes Agent 1
+    ctx.predecessor_account_id(owner());
+    testing_env!(ctx.build());
+    contract.revoke_agent(agent1());
+
+    let records_before = contract.get_audit_records(None, None);
+    let count_before = records_before.len();
+
+    // Owner attempts to approve pending request from revoked agent -> Invalidated
+    let app_res = contract.approve_request(req_id);
+    assert_eq!(
+        app_res,
+        ApprovalResult::Invalidated {
+            reason: InvalidationReason::AgentRevoked
+        }
+    );
+
+    // Reservations released, status marked Rejected
+    assert_eq!(contract.get_pending_reserved(), NearToken::from_yoctonear(0));
+    assert_eq!(contract.get_global_pending_count(), 0);
+    let req = contract.get_request(req_id).unwrap();
+    assert_eq!(req.status, RequestStatus::Rejected);
+
+    // Must record invalidation in persistent audit ring
+    let records_after = contract.get_audit_records(None, None);
+    assert_eq!(records_after.len(), count_before + 1);
+
+    let last_record = records_after.last().unwrap();
+    assert_eq!(last_record.event_type, vault_contract::audit::AuditEventType::PaymentPolicyInvalidated);
+    assert_eq!(last_record.request_id, req_id);
+    assert_eq!(last_record.account_id, agent1());
+    assert_eq!(last_record.amount, NearToken::from_near(8));
+    assert_eq!(last_record.code, InvalidationReason::AgentRevoked as u8);
+    assert_eq!(last_record.sequence_id, count_before as u64 + 1);
+}
