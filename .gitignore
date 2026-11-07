@@ -91,6 +91,8 @@ frontend/capture-modals.mjs
 frontend/capture-screens.mjs
 frontend/test-poll.mjs
 frontend/verify-mobile-nav.mjs
+frontend/test-vercel-api.mjs
+frontend/test-routes-refresh.mjs
 
 # ------------------------------------------------------------------------------
 # 8. Editor & IDE Settings
