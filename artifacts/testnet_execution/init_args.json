@@ -1,0 +1,10 @@
+{
+  "owner_id": "owner.vault-parent.testnet",
+  "max_per_transaction": "1000000000000000000000000",
+  "daily_cap": "2000000000000000000000000",
+  "auto_approval_threshold": "200000000000000000000000",
+  "destination_allowlist": [
+    "merchant.vault-parent.testnet",
+    "delisted.vault-parent.testnet"
+  ]
+}
