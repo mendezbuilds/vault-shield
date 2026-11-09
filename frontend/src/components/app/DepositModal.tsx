@@ -9,6 +9,7 @@ import {
   RECOMMENDED_GAS_RESERVE_YOCTO,
 } from '../../utils/depositValidation';
 import { WalletModal } from '../common/WalletModal';
+import { externalDepositStorage } from '../../services/depositStorage';
 import {
   Coins,
   ArrowRight,
@@ -132,6 +133,20 @@ export const DepositModal: React.FC<DepositModalProps> = ({
       if (res.success && res.txHash) {
         setTxHash(res.txHash);
         setStep('success');
+
+        // Persist confirmed external deposit to survive refresh & appear in Transactions ledger
+        externalDepositStorage.saveDeposit({
+          txHash: res.txHash,
+          senderId: accountId || 'unknown.testnet',
+          receiverId: overview.contractId || VAULT_CONTRACT_ID,
+          amountNear: amount,
+          amountYocto: validation.yoctoAmount,
+          timestamp: Date.now(),
+          status: 'confirmed',
+          networkId: 'testnet',
+          source: 'direct_transfer',
+        });
+
         // Asynchronously refresh balances
         executePostTxRefresh();
       } else {

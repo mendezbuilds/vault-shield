@@ -95,12 +95,13 @@ class NearWalletService {
       ],
     });
 
-    if (outcome && typeof outcome === 'object') {
-      if ('transaction' in outcome && (outcome as any).transaction?.hash) {
-        return (outcome as any).transaction.hash;
+    const single = Array.isArray(outcome) ? outcome[0] : outcome;
+    if (single && typeof single === 'object') {
+      if ('transaction' in single && (single as any).transaction?.hash) {
+        return (single as any).transaction.hash;
       }
-      if ('transaction_outcome' in outcome && (outcome as any).transaction_outcome?.id) {
-        return (outcome as any).transaction_outcome.id;
+      if ('transaction_outcome' in single && (single as any).transaction_outcome?.id) {
+        return (single as any).transaction_outcome.id;
       }
     }
     return null;
@@ -130,12 +131,13 @@ class NearWalletService {
       ],
     });
 
-    if (outcome && typeof outcome === 'object') {
-      if ('transaction' in outcome && (outcome as any).transaction?.hash) {
-        return (outcome as any).transaction.hash;
+    const single = Array.isArray(outcome) ? outcome[0] : outcome;
+    if (single && typeof single === 'object') {
+      if ('transaction' in single && (single as any).transaction?.hash) {
+        return (single as any).transaction.hash;
       }
-      if ('transaction_outcome' in outcome && (outcome as any).transaction_outcome?.id) {
-        return (outcome as any).transaction_outcome.id;
+      if ('transaction_outcome' in single && (single as any).transaction_outcome?.id) {
+        return (single as any).transaction_outcome.id;
       }
     }
     return null;
