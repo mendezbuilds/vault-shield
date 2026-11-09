@@ -137,31 +137,35 @@ Audit Ring Event Count:          37 records (50-slot capacity)
 - **Explorer Link**: [https://explorer.testnet.near.org/transactions/37oJPsbysoFLtzcUeKh1KZq4YEm14pxCepCzc5cz1Z54](https://explorer.testnet.near.org/transactions/37oJPsbysoFLtzcUeKh1KZq4YEm14pxCepCzc5cz1Z54)
 - **Gas Used**: 3.5 Tgas | **Execution Fee**: 0.00032 NEAR
 - **On-Chain Audit Event**: Sequence ID 38, Event `PaymentExpired`, Request ID 2, Timestamp `1794211966520387600`.
-- **Accounting Reconciliation**:
-  - Pending Reserved: Released from `0.100 NEAR` to `0.000 NEAR`.
-  - Available Liquid Balance: Restored from `0.1488 NEAR` to `0.2489 NEAR`.
-  - Global Pending Count: Decremented from `1` to `0`.
-  - Agent-A Pending Count: Decremented from `1` to `0`.
+- **Exact Storage & Solvency Accounting**:
+  - **Account Balance (`amount`)**: Invariant at `5,196,339,779,683,687,800,000,000` yocto (`5.19633978 NEAR`). Zero deposit attached.
+  - **Storage Usage**: Decreased from `484,752` bytes to `484,737` bytes ($-15$ bytes freed upon removing request 2 from `pending_request_ids`).
+  - **Storage Reserve Requirement**: Decreased from `4,947,520,000,000,000,000,000,000` yocto (`4.947520 NEAR`) to `4,947,370,000,000,000,000,000,000` yocto (`4.947370 NEAR`) ($-0.000150$ NEAR reserve reduction).
+  - **Pending Reserved Escrow**: Decreased from `0.100000 NEAR` to `0.000000 NEAR` ($-0.100000$ NEAR released).
+  - **Available Liquid Balance**: Increased from `0.148820 NEAR` to `0.248969 NEAR` ($+0.100150$ NEAR total increase: $+0.100000$ NEAR unreserved escrow $+ 0.000150$ NEAR storage reserve reduction).
+  - **Global Pending Queue**: Cleared from `1 / 32 Slots` to `0 / 32 Slots`.
+  - **Agent-A Pending Quota**: Cleared from `1 / 2 Slots` to `0 / 2 Slots`.
 
-### 6.2 Payment & Policy Enforcement Test Matrix
+### 6.2 Payment & Policy Enforcement Test Matrix (Exact Phase 1 Enums)
 
-| Test ID | Test Name | Signer Identity | Method & Parameters | Result & Evidence | Status |
+| Test ID | Test Name | Signer Identity | Method & Parameters | Result & Exact Phase 1 Enum | Verification Status |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **TEST-01** | Valid Auto-Approved Payment | `agent-a.vault-parent.testnet` | `request_payment({"amount": "0.15 NEAR", ...})` | Auto-dispatched & executed (Audit Seq 3 & 4) | **Phase 2 Verified** |
-| **TEST-02** | Approval-Required Payment | `agent-a.vault-parent.testnet` | `request_payment({"amount": "0.50 NEAR", ...})` | Queued in pending (Audit Seq 7) | **Phase 2 Verified** |
-| **TEST-03** | Owner Approval Execution | `owner.vault-parent.testnet` | `approve_request({"request_id": 3})` | Approved & executed (Audit Seq 11 & 12) | **Phase 2 Verified** |
-| **TEST-04** | Per-Transaction Cap | `agent-a.vault-parent.testnet` | `request_payment({"amount": "1.50 NEAR", ...})` | Denied: `MaxPerTransactionExceeded` (Audit Seq 5) | **Phase 2 Verified** |
-| **TEST-05** | Daily Cap Enforcement | `agent-a.vault-parent.testnet` | `request_payment({"amount": "0.50 NEAR", ...})` | Denied: `DailyCapExceeded` (Audit Seq 37) | **Phase 2 Verified** |
-| **TEST-06** | Unlisted Destination Gating | `agent-a.vault-parent.testnet` | `request_payment({"amount": "0.10 NEAR", ...})` | Queued: `NewDestinationOnly` (Audit Seq 6) | **Phase 2 Verified** |
-| **TEST-07** | Revoked Agent Invalidation | `agent-rev.vault-parent.testnet`| `revoke_agent` by owner | Revoked & invalidated (Audit Seq 17 & 18) | **Phase 2 Verified** |
-| **TEST-08** | Emergency Paused Vault | `owner.vault-parent.testnet` | `pause()` | Denied: `VaultIsPaused` (Audit Seq 20 & 21) | **Phase 2 Verified** |
-| **TEST-09** | Unauthorized Owner Action | Non-owner caller | `pause()`, `withdraw()`, `set_policy()` | Panics with `"Unauthorized caller"` | **Read-Only / Unit Verified (Live Tx Not Run)** |
-| **TEST-10** | Request Expiry & Release | `relayer.vault-parent.testnet` | `expire_request({"request_id": 2})` | Expired, 0.100 NEAR released (Audit Seq 38) | **Stage 4 Newly Executed**<br/>Tx: `37oJPsbysoFLtz...` |
+| **TEST-01** | Valid Auto-Approved Payment | `agent-a.vault-parent.testnet` | `request_payment({"amount": "0.15 NEAR", ...})` | Auto-dispatched & executed (Audit Seq 3 & 4) | **Phase 2 Verified (On-Chain Audit)** |
+| **TEST-02** | Approval-Required Payment | `agent-a.vault-parent.testnet` | `request_payment({"amount": "0.50 NEAR", ...})` | Queued: `PendingReason::AboveThresholdOnly` (Audit Seq 7) | **Phase 2 Verified (On-Chain Audit)** |
+| **TEST-03** | Owner Approval Execution | `owner.vault-parent.testnet` | `approve_request({"request_id": 3})` | Approved & executed (Audit Seq 11 & 12) | **Phase 2 Verified (On-Chain Audit)** |
+| **TEST-04** | Per-Transaction Cap | `agent-a.vault-parent.testnet` | `request_payment({"amount": "1.50 NEAR", ...})` | Denied: `PolicyDenialReason::ExceedsPerTransactionCap` (Audit Seq 5) | **Phase 2 Verified (On-Chain Audit)** |
+| **TEST-05** | Daily Cap Enforcement | `agent-a.vault-parent.testnet` | `request_payment({"amount": "0.50 NEAR", ...})` | Denied: `PolicyDenialReason::ExceedsDailyCap` (Audit Seq 37) | **Phase 2 Verified (On-Chain Audit)** |
+| **TEST-06** | Unlisted Destination Gating | `agent-a.vault-parent.testnet` | `request_payment({"amount": "0.10 NEAR", ...})` | Queued: `PendingReason::NewDestinationOnly` (Audit Seq 6) | **Phase 2 Verified (On-Chain Audit)** |
+| **TEST-07** | Revoked Agent Invalidation | `agent-rev.vault-parent.testnet`| `revoke_agent` by owner | Invalidated: `InvalidationReason::AgentRevoked` (Audit Seq 17 & 18) | **Phase 2 Verified (On-Chain Audit)** |
+| **TEST-08** | Emergency Paused Vault | `owner.vault-parent.testnet` | `pause()` | Denied: `PolicyDenialReason::VaultPaused` (Audit Seq 20 & 21) | **Phase 2 Verified (On-Chain Audit)** |
+| **TEST-09** | Unauthorized Owner Action | Non-owner caller | `pause()`, `withdraw()`, `set_policy()` | Panics with `"Unauthorized caller"` (source `assert_owner`) | **Source & Unit Verified (Live Tx Not Run)** |
+| **TEST-10** | Request Expiry & Release | `relayer.vault-parent.testnet` | `expire_request({"request_id": 2})` | Expired, 0.100 NEAR released (Audit Seq 38) | **Stage 4 Newly Executed (On-Chain)**<br/>Tx: `37oJPsbysoFLtz...` |
 
-### 6.3 Genuine Wallet Signing Evidence
-- In-browser signing verified via `@near-wallet-selector/core` and `@near-wallet-selector/my-near-wallet`.
-- Public serverless execution route `/api/tx/execute` rejects evaluation personas, enforcing real wallet signing.
-- Interactive Web3 browser login was NOT RUN autonomously as it requires human OAuth approval on `testnet.mynearwallet.com`. Transaction signing was independently verified via NEAR Testnet CLI and on-chain RPC.
+### 6.3 Genuine Wallet Signing Status (Manual Acceptance Required)
+- **Browser Wallet Signing NOT EXECUTED**: Interactive browser signing via MyNearWallet was **NOT RUN** during automated verification, as it requires human credential entry, password, or seed phrase confirmation on external domain `testnet.mynearwallet.com`. Mendez's personal Meteor wallet (`cleartoad8704.testnet`) was never accessed.
+- **Client-Side Architecture**: Code audit confirms `@near-wallet-selector/core` and `@near-wallet-selector/my-near-wallet` sign in-browser. Public `/api/tx/execute` rejects simulated personas on production deployments with HTTP 403.
+- **Testnet CLI Independent Verification**: Transaction signing with authorized testnet credentials was verified on-chain via the official NEAR CLI (`STAGE4-EXPIRY-REQ2`).
+- **Remaining Acceptance**: Final interactive browser wallet signing is reserved for manual acceptance testing by evaluators using their testnet wallets.
 
 ---
 

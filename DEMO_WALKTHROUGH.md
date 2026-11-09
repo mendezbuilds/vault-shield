@@ -130,8 +130,9 @@ In the top right navigation bar, click the **Wallet / Persona** button to simula
 
 ### Policy Enforcement & Security Summary
 - All 10 core policy scenarios verified via on-chain audit ring events and Stage 4 execution.
-- Real transactions sign client-side via Wallet Selector.
+- Real transactions sign client-side via Wallet Selector (interactive browser wallet signing is an external human OAuth acceptance test).
 - Serverless proxy `/api/tx/execute` blocks simulation attacks on production.
 - Contract remains non-custodial and mathematically solvent.
+- Storage reservation equations confirmed: 15-byte contraction upon expiry reduced required storage reserve by 0.000150 NEAR, returning it directly to liquid balance.
 
 

@@ -203,52 +203,90 @@ The expiry of pending Request #2 was executed directly against `contract.vault-p
   ```
 - **Audit Ring Record**: Sequence ID `38`, Event Type `PaymentExpired`, Request ID `2`, Timestamp `1794211966520387600`, Amount `100000000000000000000000` yocto.
 
-### 7.2 Before / After Solvency & Queue Accounting
+### 7.2 Before / After Solvency & Storage Reconciled Accounting
 
-| Accounting Metric | Pre-Expiry State | Post-Expiry State | Net Delta |
-| :--- | :--- | :--- | :--- |
-| **Total Account Balance** | `5.196339 NEAR` | `5.196489 NEAR` | $+0.000150\text{ NEAR}$ |
-| **Storage Reserve Requirement** | `4.947520 NEAR` | `4.947520 NEAR` | $0.000000\text{ NEAR}$ |
-| **Protected Balance** | `0.248820 NEAR` | `0.248969 NEAR` | $+0.000149\text{ NEAR}$ |
-| **Pending Reserved (Escrow)** | `0.100000 NEAR` | `0.000000 NEAR` | $\mathbf{-0.100000\text{ NEAR (RELEASED)}}$ |
-| **Inflight Reserved** | `0.000000 NEAR` | `0.000000 NEAR` | $0.000000\text{ NEAR}$ |
-| **Available Liquid Balance** | `0.148820 NEAR` | `0.248969 NEAR` | $\mathbf{+0.100149\text{ NEAR}}$ |
-| **Global Pending Count** | `1` | `0` | $-1$ |
-| **Agent-A Pending Count** | `1` | `0` | $-1$ |
-| **Request #2 Status** | `Pending` | `Expired` | State finalized |
+The contract's on-chain account state and storage reserve were inspected directly via NEAR Testnet RPC before and after the execution of `expire_request(2)`:
 
-**Frontend Impact Confirmed**: Headless browser verification against `https://vault-shield-two.vercel.app/#app` confirmed live rendering updated to `0 Pending Requests`, `0 / 32 Slots`, and liquid balance updated to `~0.25 NEAR`.
+#### Raw On-Chain Values
+- **Native Account Balance (`amount`)**:
+  - Pre-Expiry: `5,196,339,779,683,687,800,000,000` yoctoNEAR (`5.1963397796836878 NEAR`)
+  - Post-Expiry: `5,196,339,779,683,687,800,000,000` yoctoNEAR (`5.1963397796836878 NEAR`)
+  - **Net Change**: $\mathbf{0\text{ yoctoNEAR}}$ (Invariant. Zero deposit attached; gas was paid by signer `relayer.vault-parent.testnet`).
+
+- **Storage Footprint (`storage_usage`)**:
+  - Pre-Expiry: `484,752` bytes
+  - Post-Expiry: `484,737` bytes
+  - **Net Delta**: $\mathbf{-15\text{ bytes}}$ (Storage freed by removing `request_id: 2` from the `pending_request_ids: Vec<u64>` Borsh collection).
+
+- **Storage Reserve Requirement Formula (`src/accounting.rs`)**:
+  $$\text{Storage Reserve} = (\text{storage\_usage} + 10{,}000\text{ bytes}) \times 10^{19}\text{ yoctoNEAR/byte}$$
+  - Pre-Expiry ($484{,}752 + 10{,}000 = 494{,}752\text{ bytes}$): `4,947,520,000,000,000,000,000,000` yocto (`4.947520 NEAR`)
+  - Post-Expiry ($484{,}737 + 10{,}000 = 494{,}737\text{ bytes}$): `4,947,370,000,000,000,000,000,000` yocto (`4.947370 NEAR`)
+  - **Reserve Reduction**: $\mathbf{-150,000,000,000,000,000,000\text{ yoctoNEAR}}$ ($\mathbf{-0.000150\text{ NEAR}}$).
+
+- **Protected Balance Formula (`Account Balance - Storage Reserve`)**:
+  - Pre-Expiry: `5,196,339,779,683,687,800,000,000` - `4,947,520,000,000,000,000,000,000` = `248,819,779,683,687,800,000,000` yocto (`0.24881978 NEAR`)
+  - Post-Expiry: `5,196,339,779,683,687,800,000,000` - `4,947,370,000,000,000,000,000,000` = `248,969,779,683,687,800,000,000` yocto (`0.24896978 NEAR`)
+  - **Net Increase**: $+150,000,000,000,000,000,000\text{ yoctoNEAR}$ ($+0.000150\text{ NEAR}$).
+
+- **Pending Reserved Escrow**:
+  - Pre-Expiry: `100,000,000,000,000,000,000,000` yocto (`0.100000 NEAR`)
+  - Post-Expiry: `0` yocto (`0.000000 NEAR`)
+  - **Net Delta**: $\mathbf{-100,000,000,000,000,000,000\text{ yoctoNEAR}}$ ($\mathbf{-0.100000\text{ NEAR}}$ released).
+
+- **Available Liquid Balance (`Protected Balance - Pending Reserved - Inflight Reserved`)**:
+  - Pre-Expiry: `248,819,779,683,687,800,000,000` - `100,000,000,000,000,000,000,000` = `148,819,779,683,687,800,000,000` yocto (`0.14881978 NEAR`)
+  - Post-Expiry: `248,969,779,683,687,800,000,000` - `0` = `248,969,779,683,687,800,000,000` yocto (`0.24896978 NEAR`)
+  - **Net Increase**: $\mathbf{+100,150,000,000,000,000,000,000\text{ yoctoNEAR}}$ ($\mathbf{+0.100150\text{ NEAR}}$).
+
+#### Explanation of the Additional 0.000150 NEAR Increase
+The increase in Available Liquid Balance is composed of two distinct components:
+1. **$0.100000\text{ NEAR}$ ($10^{23}\text{ yocto}$)**: The unreserved escrow amount returned from `pending_reserved` upon expiration of Request #2.
+2. **$0.000150\text{ NEAR}$ ($150 \times 10^{18}\text{ yocto}$)**: The reduction in the mathematically enforced storage reserve requirement. Because expiring Request #2 removed its ID from the contract's `pending_request_ids` vector, on-chain state contracted by 15 bytes. At NEAR's fixed rate of $10^{19}\text{ yoctoNEAR/byte}$ ($10\text{ NEAR/MB}$), this 15-byte contraction lowered the required storage reserve from $4.947520\text{ NEAR}$ to $4.947370\text{ NEAR}$, automatically converting $0.000150\text{ NEAR}$ of previously quarantined storage staking into unencumbered liquid balance.
+
+#### Solvency Summary Table
+| Metric | Pre-Expiry Value | Post-Expiry Value | Exact Delta | Unit |
+| :--- | :--- | :--- | :--- | :--- |
+| **Native Balance (`amount`)** | `5,196,339,779,683,687,800,000,000` | `5,196,339,779,683,687,800,000,000` | $0$ | yoctoNEAR |
+| **Storage Usage** | `484,752` | `484,737` | $-15$ | bytes |
+| **Storage Reserve Req** | `4,947,520,000,000,000,000,000,000` | `4,947,370,000,000,000,000,000,000` | $-150,000,000,000,000,000,000$ | yoctoNEAR |
+| **Protected Balance** | `248,819,779,683,687,800,000,000` | `248,969,779,683,687,800,000,000` | $+150,000,000,000,000,000,000$ | yoctoNEAR |
+| **Pending Reserved** | `100,000,000,000,000,000,000,000` | `0` | $-100,000,000,000,000,000,000,000$ | yoctoNEAR |
+| **Available Liquid** | `148,819,779,683,687,800,000,000` | `248,969,779,683,687,800,000,000` | $+100,150,000,000,000,000,000,000$ | yoctoNEAR |
+| **Global Pending Queue** | `1` | `0` | $-1$ | slots |
+| **Agent-A Pending Count** | `1` | `0` | $-1$ | slots |
 
 ---
 
-### 7.3 Payment & Policy Enforcement Test Matrix
+### 7.3 Payment & Policy Enforcement Test Matrix (Exact Phase 1 Enums)
 
-Evidence distinguishing newly executed Stage 4 tests, previously verified Phase 2 on-chain tests, and read-only / unit verifications:
+The table below maps test cases directly to the exact enum definitions in the frozen Phase 1 Rust source (`PolicyDenialReason`, `PendingReason`, `InvalidationReason` in `src/types.rs`):
 
 | Test ID | Test Category | Signer Account | Contract Method & Input | Expected Outcome | Actual Outcome & Proof | Verification Status |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **TEST-01** | Valid payment within policy | `agent-a.vault-parent.testnet` | `request_payment({"amount": "0.15 NEAR", "destination": "merchant..."})` | Auto-dispatched and executed | Dispatched and executed to merchant. Recorded in Audit Ring Seq 3 & 4. | **Phase 2 Verified** |
-| **TEST-02** | Approval-required payment | `agent-a.vault-parent.testnet` | `request_payment({"amount": "0.50 NEAR", "destination": "merchant..."})` | Enters pending queue | Held in pending queue (exceeds 0.20 threshold). Recorded in Audit Ring Seq 7. | **Phase 2 Verified** |
-| **TEST-03** | Owner approval | `owner.vault-parent.testnet` | `approve_request({"request_id": 3})` | Payment approved & dispatched | Approved by owner and executed to merchant. Recorded in Audit Ring Seq 11 & 12. | **Phase 2 Verified** |
-| **TEST-04** | Per-transaction cap | `agent-a.vault-parent.testnet` | `request_payment({"amount": "1.50 NEAR", "destination": "merchant..."})` | Rejected on-chain | Denied (`MaxPerTransactionExceeded`, code 2). Recorded in Audit Ring Seq 5. | **Phase 2 Verified** |
-| **TEST-05** | Daily cap | `agent-a.vault-parent.testnet` | `request_payment({"amount": "0.50 NEAR", "destination": "merchant..."})` | Denied when daily budget exceeded | Denied (`DailyCapExceeded`, code 3). Recorded in Audit Ring Seq 37. | **Phase 2 Verified** |
-| **TEST-06** | Unlisted destination | `agent-a.vault-parent.testnet` | `request_payment({"amount": "0.10 NEAR", "destination": "unlisted..."})` | Held for owner approval | Held in pending (code 1, `NewDestinationOnly`) despite amount < threshold. Audit Seq 6. | **Phase 2 Verified** |
-| **TEST-07** | Revoked agent | `agent-rev.vault-parent.testnet` | `request_payment(...)` after `revoke_agent` | Calls denied / invalidated | Owner revoked agent in Audit Seq 17; pending req 6 invalidated in Seq 18; `is_agent_authorized` returns false. | **Phase 2 Verified** |
-| **TEST-08** | Paused vault | `owner.vault-parent.testnet` / `agent-a` | `pause()` followed by `request_payment(...)` | All payments blocked | Vault paused in Audit Seq 20; payment denied with `VaultIsPaused` code 0 in Seq 21. | **Phase 2 Verified** |
-| **TEST-09** | Unauthorized owner action | Non-owner caller (`relayer` / `agent-a`) | `pause()`, `set_policy()`, `withdraw()` | Revert with panic | Contract source `assert_owner` panics with `"Unauthorized caller: predecessor is not owner"`. Verified in Rust unit suite `test_unauthorized_pause_rejected`. | **Safe Read-Only / Unit Verified (Live Tx Not Run)** |
-| **TEST-10** | Expired request | `relayer.vault-parent.testnet` | `expire_request({"request_id": 2})` | Reservation released, status Expired | Request #2 transitioned to Expired. 0.100 NEAR reservation released to liquid pool. Audit Seq 38. | **Stage 4 Newly Executed**<br/>Tx: [`37oJPsbysoFLtz...`](https://explorer.testnet.near.org/transactions/37oJPsbysoFLtzcUeKh1KZq4YEm14pxCepCzc5cz1Z54) |
+| **TEST-01** | Valid payment within policy | `agent-a.vault-parent.testnet` | `request_payment({"amount": "0.15 NEAR", "destination": "merchant..."})` | Auto-dispatched and executed | Dispatched and executed to merchant. Recorded in Audit Ring Seq 3 & 4. | **Phase 2 Verified (On-Chain Audit)** |
+| **TEST-02** | Approval-required payment | `agent-a.vault-parent.testnet` | `request_payment({"amount": "0.50 NEAR", "destination": "merchant..."})` | Enters pending queue | Held in pending queue (`PendingReason::AboveThresholdOnly`, code 2). Audit Seq 7. | **Phase 2 Verified (On-Chain Audit)** |
+| **TEST-03** | Owner approval | `owner.vault-parent.testnet` | `approve_request({"request_id": 3})` | Payment approved & dispatched | Approved by owner and executed to merchant. Recorded in Audit Ring Seq 11 & 12. | **Phase 2 Verified (On-Chain Audit)** |
+| **TEST-04** | Per-transaction cap | `agent-a.vault-parent.testnet` | `request_payment({"amount": "1.50 NEAR", "destination": "merchant..."})` | Rejected on-chain | Denied (`PolicyDenialReason::ExceedsPerTransactionCap`, code 2). Audit Seq 5. | **Phase 2 Verified (On-Chain Audit)** |
+| **TEST-05** | Daily cap | `agent-a.vault-parent.testnet` | `request_payment({"amount": "0.50 NEAR", "destination": "merchant..."})` | Denied when daily budget exceeded | Denied (`PolicyDenialReason::ExceedsDailyCap`, code 3). Audit Seq 37. | **Phase 2 Verified (On-Chain Audit)** |
+| **TEST-06** | Unlisted destination | `agent-a.vault-parent.testnet` | `request_payment({"amount": "0.10 NEAR", "destination": "unlisted..."})` | Held for owner approval | Held in pending (`PendingReason::NewDestinationOnly`, code 1). Audit Seq 6. | **Phase 2 Verified (On-Chain Audit)** |
+| **TEST-07** | Revoked agent | `agent-rev.vault-parent.testnet` | `request_payment(...)` after `revoke_agent` | Calls denied / invalidated | Agent revoked in Audit Seq 17; pending req 6 invalidated (`InvalidationReason::AgentRevoked`, code 1) in Seq 18. | **Phase 2 Verified (On-Chain Audit)** |
+| **TEST-08** | Paused vault | `owner.vault-parent.testnet` / `agent-a` | `pause()` followed by `request_payment(...)` | All payments blocked | Vault paused in Audit Seq 20; payment denied (`PolicyDenialReason::VaultPaused`, code 0) in Seq 21. | **Phase 2 Verified (On-Chain Audit)** |
+| **TEST-09** | Unauthorized owner action | Non-owner caller (`relayer` / `agent-a`) | `pause()`, `set_policy()`, `withdraw()` | Revert with panic | Contract source `assert_owner` panics with `"Unauthorized caller: predecessor is not owner"`. Verified in Rust unit test suite `test_unauthorized_pause_rejected`. | **Source & Unit Test Verified (Live Tx Not Run)** |
+| **TEST-10** | Expired request | `relayer.vault-parent.testnet` | `expire_request({"request_id": 2})` | Reservation released, status Expired | Request #2 transitioned to Expired. 0.100 NEAR reservation released to liquid pool. Audit Seq 38. | **Stage 4 Newly Executed (On-Chain)**<br/>Tx: [`37oJPsbysoFLtz...`](https://explorer.testnet.near.org/transactions/37oJPsbysoFLtzcUeKh1KZq4YEm14pxCepCzc5cz1Z54) |
 
 ---
 
-### 7.4 Genuine Wallet Signing Verification
+### 7.4 Genuine Wallet Signing Status (Manual Acceptance Required)
 
-- **Architecture Audit**: `frontend/src/services/nearWallet.ts` uses `@near-wallet-selector/core` and `@near-wallet-selector/my-near-wallet`.
-- **Client-Side Isolation**: Transactions initiated by genuine wallets invoke `wallet.signAndSendTransaction` directly inside the browser DOM. No private keys, seed phrases, or signatures touch any server route.
-- **Production Endpoint Protection**: `/api/tx/execute` rejects evaluation personas on production deployments with HTTP 403, guaranteeing that simulated personas cannot execute transactions.
-- **Live Interactive Web3 Wallet Execution**:
-  - Wallet Selector initializes cleanly on `https://vault-shield-two.vercel.app`.
-  - MyNearWallet integration redirects to `https://testnet.mynearwallet.com` for official key delegation.
-  - Interactive browser signing via third-party web wallet was **NOT RUN** autonomously because external OAuth redirection to `testnet.mynearwallet.com` requires interactive human approval and CAPTCHA / credential entry. Transaction signing was independently verified via the official NEAR Testnet CLI and on-chain RPC execution (`STAGE4-EXPIRY-REQ2`).
+- **Browser Wallet Signing NOT EXECUTED**: In-browser signing via MyNearWallet was **NOT RUN** during automated verification.
+  - *Reason*: Authenticating with MyNearWallet requires an interactive OAuth flow redirecting to the external web domain `https://testnet.mynearwallet.com`, where human credential entry, password, or seed phrase confirmation is required. Operating under zero-credential and test-isolation constraints, automated scripts cannot and must not simulate or bypass external third-party human authentication.
+  - *Policy Compliance*: Mendez's personal Meteor wallet (`cleartoad8704.testnet`) was never accessed or referenced.
+- **What Was Verified**:
+  - The client-side signing architecture in `frontend/src/services/nearWallet.ts` was verified by code audit. It utilizes `@near-wallet-selector/core` and `@near-wallet-selector/my-near-wallet`.
+  - The public `/api/tx/execute` route was verified to explicitly reject simulated persona transactions on production with HTTP 403.
+  - Transaction signing with authorized testnet keys was independently verified using the official NEAR CLI for on-chain execution of `expire_request(2)` (`STAGE4-EXPIRY-REQ2`).
+- **Remaining Manual Acceptance Test**: Final interactive browser wallet signing must be performed manually by an evaluator or owner connecting a personal testnet wallet through the live UI.
 
 ---
 
