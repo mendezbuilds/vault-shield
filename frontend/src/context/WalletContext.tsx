@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { VAULT_CONTRACT_ID } from '../types/contract';
 import { nearRpc } from '../services/nearRpc';
 import { nearWallet, SupportedWalletId } from '../services/nearWallet';
@@ -13,17 +13,21 @@ export interface TxStatus {
   error?: string | null;
 }
 
-interface WalletContextType {
+export interface WalletContextType {
   accountId: string | null;
   role: UserRole | null;
   authType: AuthType | null;
   walletId: string | null;
+  walletBalance: string | null;
+  isBalanceLoading: boolean;
+  balanceError: string | null;
   isConnected: boolean;
   isConnecting: boolean;
   txStatus: TxStatus;
   connectGenuineWallet: (targetWallet?: SupportedWalletId) => Promise<void>;
   connectPersona: (targetAccountId: string) => Promise<void>;
   disconnect: () => Promise<void>;
+  refreshBalance: () => Promise<void>;
   clearTxStatus: () => void;
   executeContractCall: (
     methodName: string,
@@ -74,8 +78,56 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [role, setRole] = useState<UserRole | null>(null);
   const [authType, setAuthType] = useState<AuthType | null>(null);
   const [walletId, setWalletId] = useState<string | null>(null);
+  const [walletBalance, setWalletBalance] = useState<string | null>(null);
+  const [isBalanceLoading, setIsBalanceLoading] = useState<boolean>(false);
+  const [balanceError, setBalanceError] = useState<string | null>(null);
   const [isConnecting, setIsConnecting] = useState<boolean>(false);
   const [txStatus, setTxStatus] = useState<TxStatus>({ state: 'idle' });
+
+  const fetchBalanceForAccount = useCallback(async (targetId: string | null) => {
+    if (!targetId) {
+      setWalletBalance(null);
+      setIsBalanceLoading(false);
+      setBalanceError(null);
+      return;
+    }
+
+    setIsBalanceLoading(true);
+    setBalanceError(null);
+    try {
+      const acct = await nearRpc.viewAccount(targetId);
+      setWalletBalance(acct.amount || '0');
+      setBalanceError(null);
+    } catch (err: any) {
+      console.warn(`[WalletContext] Failed to fetch balance for ${targetId}:`, err);
+      const msg = err?.message || '';
+      if (msg.includes('does not exist') || msg.includes('UNKNOWN_ACCOUNT')) {
+        setBalanceError('Account not found on testnet');
+      } else {
+        setBalanceError(err?.message || 'Failed to query testnet balance');
+      }
+      setWalletBalance(null);
+    } finally {
+      setIsBalanceLoading(false);
+    }
+  }, []);
+
+  const refreshBalance = useCallback(async () => {
+    if (accountId) {
+      await fetchBalanceForAccount(accountId);
+    }
+  }, [accountId, fetchBalanceForAccount]);
+
+  // Sync balance whenever active account changes
+  useEffect(() => {
+    if (accountId) {
+      fetchBalanceForAccount(accountId);
+    } else {
+      setWalletBalance(null);
+      setIsBalanceLoading(false);
+      setBalanceError(null);
+    }
+  }, [accountId, fetchBalanceForAccount]);
 
   // On mount, check if genuine wallet was signed in via redirect or saved persona
   useEffect(() => {
@@ -185,6 +237,9 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setRole(null);
     setAuthType(null);
     setWalletId(null);
+    setWalletBalance(null);
+    setIsBalanceLoading(false);
+    setBalanceError(null);
     localStorage.removeItem(STORAGE_ACCOUNT_KEY);
     localStorage.removeItem(STORAGE_AUTH_TYPE_KEY);
     setTxStatus({ state: 'idle' });
@@ -224,6 +279,9 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           message: 'Transaction successfully executed on NEAR Testnet!',
           txHash: hash,
         });
+        if (accountId) {
+          fetchBalanceForAccount(accountId).catch(console.warn);
+        }
         return { success: true, txHash: hash };
       }
 
@@ -258,6 +316,10 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         txHash: resData.txHash,
       });
 
+      if (accountId) {
+        fetchBalanceForAccount(accountId).catch(console.warn);
+      }
+
       return { success: true, txHash: resData.txHash };
     } catch (err: any) {
       const errMsg = err?.message || 'Transaction execution error';
@@ -276,12 +338,16 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         role,
         authType,
         walletId,
+        walletBalance,
+        isBalanceLoading,
+        balanceError,
         isConnected: Boolean(accountId),
         isConnecting,
         txStatus,
         connectGenuineWallet,
         connectPersona,
         disconnect,
+        refreshBalance,
         clearTxStatus,
         executeContractCall,
       }}

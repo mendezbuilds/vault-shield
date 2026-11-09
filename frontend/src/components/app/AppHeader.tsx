@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useWallet } from '../../context/WalletContext';
 import { WalletModal } from '../common/WalletModal';
-import { truncateId } from '../../utils/formatters';
+import { truncateId, formatNear } from '../../utils/formatters';
 import {
   Wallet,
   Shield,
@@ -28,7 +28,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   isRefreshing,
   onExitToLanding,
 }) => {
-  const { accountId, role, authType, walletId, isConnected, disconnect } = useWallet();
+  const { accountId, role, authType, walletId, walletBalance, isBalanceLoading, isConnected, disconnect, refreshBalance } = useWallet();
   const [isWalletModalOpen, setIsWalletModalOpen] = useState(false);
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
 
@@ -115,13 +115,16 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
 
           {/* Refresh button */}
           <button
-            onClick={onRefresh}
-            disabled={isRefreshing}
-            aria-label="Refresh contract state from NEAR RPC"
-            title="Refresh contract state from NEAR RPC"
+            onClick={() => {
+              onRefresh();
+              refreshBalance();
+            }}
+            disabled={isRefreshing || isBalanceLoading}
+            aria-label="Refresh contract state and wallet balance from NEAR RPC"
+            title="Refresh contract state and wallet balance from NEAR RPC"
             className="p-2 sm:p-2.5 rounded-xl text-charcoal-500 hover:text-charcoal-900 bg-surface-white hover:bg-ivory-warm border border-border transition-colors shadow-soft disabled:opacity-50 touch-manipulation"
           >
-            <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-near-dark' : ''}`} />
+            <RefreshCw className={`w-4 h-4 ${isRefreshing || isBalanceLoading ? 'animate-spin text-near-dark' : ''}`} />
           </button>
 
           {/* Exit to Public Landing */}
@@ -163,6 +166,12 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
                     <div className="text-xs font-mono text-charcoal-900 truncate font-bold mt-1">
                       {accountId}
                     </div>
+                    {walletBalance !== null && (
+                      <div className="text-xs font-mono text-near-dark font-extrabold mt-1.5 flex items-center justify-between">
+                        <span className="text-[10px] uppercase font-bold text-charcoal-400">Balance</span>
+                        <span>{formatNear(walletBalance, 4)} NEAR</span>
+                      </div>
+                    )}
                   </div>
 
                   <div className="py-2 space-y-1">
