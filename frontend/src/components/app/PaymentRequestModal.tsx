@@ -13,7 +13,6 @@ import {
   Lock,
   KeyRound,
   Bot,
-  User,
 } from 'lucide-react';
 
 interface PaymentRequestModalProps {
@@ -46,7 +45,13 @@ export const PaymentRequestModal: React.FC<PaymentRequestModalProps> = ({
   const isAuthorizedAgent = Boolean(
     accountId && authorizedAgents.length > 0 && authorizedAgents.includes(accountId)
   );
-  const isAuthorizedSigner = isOwner || isAuthorizedAgent;
+
+  // Separate Authorization from Browser-Wallet Signing Capability:
+  // - Vault Owner: Can dispatch administrative requests via connected browser wallet.
+  // - Authorized Agent: On-chain authorization is recognized, but autonomous dispatch
+  //   requires the agent's headless runtime holding its restricted Function-Call Access Key.
+  //   Browser wallets do not hold the agent's restricted key.
+  const canBrowserDispatch = isOwner;
 
   // Signer Role Label & Badge Class
   const signerRoleLabel = isOwner
@@ -99,10 +104,11 @@ export const PaymentRequestModal: React.FC<PaymentRequestModalProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Strict security guard: fail closed, prevent unauthorized calls
-    if (!isAuthorizedSigner) {
+    // Strict security guard: Only the vault owner can dispatch from browser wallet.
+    // Autonomous agents require headless execution using their restricted Function-Call Key.
+    if (!canBrowserDispatch) {
       console.warn(
-        '[PaymentRequestModal] Unauthorized dispatch attempt prevented for:',
+        '[PaymentRequestModal] Browser wallet dispatch blocked for non-owner account:',
         accountId
       );
       return;
@@ -153,31 +159,45 @@ export const PaymentRequestModal: React.FC<PaymentRequestModalProps> = ({
               {accountId || 'No wallet connected'}
             </span>
             <span className="text-[10px] text-charcoal-400 font-sans">
-              {isAuthorizedSigner ? 'Authorized' : 'Restricted'}
+              {canBrowserDispatch ? 'Owner Dispatch Active' : 'Browser Signing Restricted'}
             </span>
           </div>
         </div>
 
-        {/* ROLE CONTEXT NOTICE */}
+        {/* STATE 1: VAULT OWNER (Browser Dispatch Permitted) */}
         {isOwner && (
           <div className="p-3 rounded-xl bg-near-light/40 border border-near-green/30 text-[11px] text-near-dark flex items-center gap-2 font-sans">
             <ShieldCheck className="w-4 h-4 text-near-dark shrink-0" />
             <span>
-              Connected as <span className="font-mono font-bold">{ownerId}</span>. Administrative payment dispatch enabled.
+              Connected as Vault Owner (<span className="font-mono font-bold">{ownerId}</span>). Administrative payment dispatch enabled.
             </span>
           </div>
         )}
 
+        {/* STATE 2: AUTHORIZED AGENT (Authorization Recognized, Browser Dispatch Separated) */}
         {isAuthorizedAgent && (
-          <div className="p-3 rounded-xl bg-blue-50 border border-blue-200 text-[11px] text-blue-900 flex items-center gap-2 font-sans">
-            <Bot className="w-4 h-4 text-blue-700 shrink-0" />
-            <span>
-              Connected as authorized agent <span className="font-mono font-bold">{accountId}</span>. Autonomous dispatch enabled.
-            </span>
+          <div className="p-4 rounded-2xl bg-blue-50/90 border border-blue-200 text-xs text-blue-950 space-y-2.5 font-sans">
+            <div className="flex items-center gap-2 font-bold font-mono text-xs uppercase text-blue-900">
+              <Bot className="w-4 h-4 text-blue-700 shrink-0" />
+              <span>On-Chain Agent Authorization Confirmed</span>
+            </div>
+            <p className="text-[11px] leading-relaxed text-blue-900/90">
+              Account <span className="font-mono font-bold text-blue-950">{accountId}</span> is verified as an active authorized agent in the vault contract.
+            </p>
+            <div className="p-2.5 rounded-xl bg-white/90 border border-blue-200 text-[11px] space-y-1">
+              <div className="flex items-center gap-1.5 font-bold text-blue-900 font-mono text-[10px] uppercase">
+                <KeyRound className="w-3.5 h-3.5 text-blue-700" />
+                <span>Autonomous Agent Runtime Required</span>
+              </div>
+              <p className="text-[10px] text-blue-900/80 leading-relaxed font-sans">
+                Autonomous agents dispatch payments from headless backend daemons holding their restricted Function-Call Access Key (<code className="font-mono font-bold text-blue-950">ed25519:2H8EupC...</code>). Standard browser wallets do not hold or sign with the agent&apos;s restricted key.
+              </p>
+            </div>
           </div>
         )}
 
-        {!isAuthorizedSigner && (
+        {/* STATE 3: UNAUTHORIZED EXTERNAL SIGNER */}
+        {!isOwner && !isAuthorizedAgent && (
           <div className="p-4 rounded-2xl bg-amber-50/90 border border-amber-300 text-xs text-amber-900 space-y-2.5 font-sans">
             <div className="flex items-center gap-2 font-bold font-mono text-xs uppercase text-amber-950">
               <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
@@ -207,7 +227,7 @@ export const PaymentRequestModal: React.FC<PaymentRequestModalProps> = ({
             type="text"
             value={destination}
             onChange={e => setDestination(e.target.value)}
-            disabled={!isAuthorizedSigner}
+            disabled={!canBrowserDispatch}
             className="w-full px-3.5 py-2.5 rounded-xl bg-ivory-warm border border-border text-xs sm:text-sm font-mono text-charcoal-900 focus:outline-none focus:border-charcoal-800 disabled:opacity-60 disabled:cursor-not-allowed"
             required
           />
@@ -215,7 +235,7 @@ export const PaymentRequestModal: React.FC<PaymentRequestModalProps> = ({
           <div className="mt-2 flex flex-wrap gap-1.5 text-[10px]">
             <button
               type="button"
-              disabled={!isAuthorizedSigner}
+              disabled={!canBrowserDispatch}
               onClick={() => setDestination('merchant.vault-parent.testnet')}
               className="px-2 py-1 rounded-lg bg-surface-white hover:bg-ivory-warm text-near-dark border border-border font-mono font-bold touch-manipulation disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -223,7 +243,7 @@ export const PaymentRequestModal: React.FC<PaymentRequestModalProps> = ({
             </button>
             <button
               type="button"
-              disabled={!isAuthorizedSigner}
+              disabled={!canBrowserDispatch}
               onClick={() => setDestination('unlisted-vendor.vault-parent.testnet')}
               className="px-2 py-1 rounded-lg bg-surface-white hover:bg-ivory-warm text-amber-800 border border-border font-mono font-bold touch-manipulation disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -241,7 +261,7 @@ export const PaymentRequestModal: React.FC<PaymentRequestModalProps> = ({
             type="text"
             value={amountNear}
             onChange={e => setAmountNear(e.target.value)}
-            disabled={!isAuthorizedSigner}
+            disabled={!canBrowserDispatch}
             className="w-full px-3.5 py-2.5 rounded-xl bg-ivory-warm border border-border text-xs sm:text-sm font-mono text-charcoal-900 focus:outline-none focus:border-charcoal-800 disabled:opacity-60 disabled:cursor-not-allowed"
             required
           />
@@ -249,7 +269,7 @@ export const PaymentRequestModal: React.FC<PaymentRequestModalProps> = ({
           <div className="mt-2 flex flex-wrap gap-1.5 text-[10px]">
             <button
               type="button"
-              disabled={!isAuthorizedSigner}
+              disabled={!canBrowserDispatch}
               onClick={() => setAmountNear('0.15')}
               className="px-2.5 py-1 rounded-lg bg-surface-white hover:bg-ivory-warm text-charcoal-800 border border-border font-mono font-bold touch-manipulation disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -257,7 +277,7 @@ export const PaymentRequestModal: React.FC<PaymentRequestModalProps> = ({
             </button>
             <button
               type="button"
-              disabled={!isAuthorizedSigner}
+              disabled={!canBrowserDispatch}
               onClick={() => setAmountNear('0.5')}
               className="px-2.5 py-1 rounded-lg bg-surface-white hover:bg-ivory-warm text-charcoal-800 border border-border font-mono font-bold touch-manipulation disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -265,7 +285,7 @@ export const PaymentRequestModal: React.FC<PaymentRequestModalProps> = ({
             </button>
             <button
               type="button"
-              disabled={!isAuthorizedSigner}
+              disabled={!canBrowserDispatch}
               onClick={() => setAmountNear('1.5')}
               className="px-2.5 py-1 rounded-lg bg-surface-white hover:bg-ivory-warm text-charcoal-800 border border-border font-mono font-bold touch-manipulation disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -283,7 +303,7 @@ export const PaymentRequestModal: React.FC<PaymentRequestModalProps> = ({
             type="text"
             value={reason}
             onChange={e => setReason(e.target.value)}
-            disabled={!isAuthorizedSigner}
+            disabled={!canBrowserDispatch}
             className="w-full px-3.5 py-2.5 rounded-xl bg-ivory-warm border border-border text-xs sm:text-sm text-charcoal-900 focus:outline-none focus:border-charcoal-800 disabled:opacity-60 disabled:cursor-not-allowed"
             required
           />
@@ -300,7 +320,7 @@ export const PaymentRequestModal: React.FC<PaymentRequestModalProps> = ({
             max="1440"
             value={ttlMinutes}
             onChange={e => setTtlMinutes(e.target.value)}
-            disabled={!isAuthorizedSigner}
+            disabled={!canBrowserDispatch}
             className="w-full px-3.5 py-2.5 rounded-xl bg-ivory-warm border border-border text-xs sm:text-sm font-mono text-charcoal-900 focus:outline-none focus:border-charcoal-800 disabled:opacity-60 disabled:cursor-not-allowed"
             required
           />
@@ -346,22 +366,29 @@ export const PaymentRequestModal: React.FC<PaymentRequestModalProps> = ({
 
           <button
             type="submit"
-            disabled={!isAuthorizedSigner}
+            disabled={!canBrowserDispatch}
             className={`inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold shadow-soft transition-all touch-manipulation ${
-              isAuthorizedSigner
+              canBrowserDispatch
                 ? 'bg-near-dark hover:bg-near-green text-white cursor-pointer active:scale-[0.98]'
                 : 'bg-charcoal-200 text-charcoal-500 cursor-not-allowed border border-charcoal-300'
             }`}
             title={
-              !isAuthorizedSigner
-                ? 'Connected signer is not authorized to submit payment requests'
-                : 'Dispatch payment request to NEAR Testnet'
+              isOwner
+                ? 'Dispatch administrative payment request as Vault Owner'
+                : isAuthorizedAgent
+                ? 'Autonomous agent dispatch requires the agent runtime holding its restricted Function-Call Access Key'
+                : 'Connected signer is not authorized to submit payment requests'
             }
           >
-            {isAuthorizedSigner ? (
+            {isOwner ? (
               <>
                 <Send className="w-3.5 h-3.5 text-white" />
-                <span>Dispatch Intent</span>
+                <span>Dispatch Intent (Owner Admin)</span>
+              </>
+            ) : isAuthorizedAgent ? (
+              <>
+                <Bot className="w-3.5 h-3.5 text-charcoal-400" />
+                <span>Agent Key Required (CLI / Daemon)</span>
               </>
             ) : (
               <>
