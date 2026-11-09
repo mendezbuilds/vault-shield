@@ -189,7 +189,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({
                   Web3 Wallet Required
                 </h4>
                 <p className="text-xs text-charcoal-600 mt-1 max-w-sm mx-auto leading-relaxed">
-                  Connect Meteor Wallet or MyNearWallet as the authorized vault owner (<span className="font-mono font-bold">{overview.ownerId}</span>) to deposit native NEAR.
+                  Connect Meteor Wallet or MyNearWallet to deposit native NEAR into Vault Shield.
                 </p>
               </div>
               <button
@@ -202,56 +202,43 @@ export const DepositModal: React.FC<DepositModalProps> = ({
             </div>
           )}
 
-          {/* STATE 2: WRONG SIGNER CONNECTED (OWNER PROTECTION) */}
-          {isConnected && !isOwner && (
-            <div className="p-6 rounded-2xl bg-amber-50/90 border border-amber-300 text-left space-y-3">
-              <div className="flex items-center gap-2.5 text-amber-900 font-bold text-sm">
-                <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
-                <span>Vault Owner Access Required</span>
+          {/* STATE 2: EVALUATION PERSONA NOTICE */}
+          {isConnected && authType === 'evaluation_persona' && (
+            <div className="p-5 rounded-2xl bg-near-light/40 border border-near-green/30 text-xs text-charcoal-700 space-y-3">
+              <div className="flex items-center gap-2 font-bold text-near-dark font-mono text-xs uppercase">
+                <ShieldCheck className="w-4 h-4 text-near-dark shrink-0" />
+                <span>Simulated Persona Mode Active ({accountId})</span>
               </div>
-              <p className="text-xs text-amber-900/90 leading-relaxed font-sans">
-                The recognized owner of this vault is <span className="font-mono font-bold underline">{overview.ownerId}</span>. Your currently connected signer is <span className="font-mono font-bold text-charcoal-900">{accountId}</span>.
-              </p>
-              <div className="p-3 rounded-xl bg-surface-white/80 border border-amber-200 text-[11px] text-amber-950 font-mono">
-                Only the designated vault owner can deposit operational capital. Depositing from another account does not establish ownership or authority over this vault.
-              </div>
-              <div className="pt-2 flex justify-end">
-                <button
-                  onClick={() => setIsWalletModalOpen(true)}
-                  className="px-4 py-2 rounded-xl bg-amber-900 text-white text-xs font-bold hover:bg-amber-800 transition-colors"
-                >
-                  Switch Signer Account
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* STATE 3: EVALUATION PERSONA NOTICE */}
-          {isConnected && isOwner && authType === 'evaluation_persona' && (
-            <div className="p-4 rounded-2xl bg-near-light/40 border border-near-green/30 text-xs text-charcoal-700 space-y-2">
-              <div className="flex items-center gap-1.5 font-bold text-near-dark font-mono text-[11px] uppercase">
-                <ShieldCheck className="w-4 h-4" />
-                <span>Evaluation Persona Mode Active</span>
-              </div>
-              <p className="text-[11px] text-charcoal-600 leading-relaxed font-sans">
-                You are viewing as the vault owner evaluation persona (<span className="font-mono font-bold">{accountId}</span>). To sign genuine on-chain native transfers on NEAR Testnet, connect via Meteor Wallet or MyNearWallet.
+              <p className="text-xs text-charcoal-600 leading-relaxed font-sans">
+                Simulated evaluation personas cannot execute authentic on-chain transfers. To deposit native NEAR into this vault on NEAR Testnet, connect an authentic Web3 wallet (such as Meteor Wallet or MyNearWallet).
               </p>
               <button
                 onClick={() => setIsWalletModalOpen(true)}
-                className="text-[11px] font-mono font-bold text-near-dark hover:underline flex items-center gap-1"
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-near-dark hover:bg-near-green text-white text-xs font-bold shadow-soft transition-all"
               >
-                <span>Connect genuine Web3 wallet</span>
-                <ArrowRight className="w-3 h-3" />
+                <Wallet className="w-3.5 h-3.5" />
+                <span>Connect Web3 Wallet</span>
               </button>
             </div>
           )}
 
-          {/* STEPS FOR AUTHORIZED SIGNER */}
-          {isConnected && isOwner && (
+          {/* STEPS FOR AUTHENTIC CONNECTED WALLET (PERMISSIONLESS DEPOSITS) */}
+          {isConnected && authType === 'genuine_wallet' && (
             <>
               {/* STEP: INPUT */}
               {step === 'input' && (
                 <div className="space-y-4">
+                  {/* Permissionless Funding Informational Notice (Requirement 3) */}
+                  <div className="p-3.5 rounded-2xl bg-ivory-warm border border-border text-xs text-charcoal-700 space-y-1 font-sans">
+                    <div className="flex items-center gap-1.5 font-bold text-charcoal-900 text-[11px] font-mono uppercase">
+                      <ShieldCheck className="w-4 h-4 text-near-dark shrink-0" />
+                      <span>Permissionless Funding Notice</span>
+                    </div>
+                    <p className="text-[11px] text-charcoal-600 leading-relaxed">
+                      Anyone can fund this vault. Depositing NEAR increases the vault&apos;s operational capital but does not grant ownership, withdrawal rights, or administrative permissions. Vault administration remains restricted to the recognized owner (<span className="font-mono font-bold text-charcoal-800">{overview.ownerId}</span>).
+                    </p>
+                  </div>
+
                   {/* Account Metadata Telemetry Strip */}
                   <div className="p-4 rounded-2xl bg-ivory-warm/80 border border-border text-xs space-y-2.5 font-mono">
                     <div className="flex items-center justify-between text-charcoal-500">
@@ -261,7 +248,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({
                       </span>
                     </div>
                     <div className="flex items-center justify-between text-charcoal-500">
-                      <span>Connected Owner:</span>
+                      <span>Connected Signer:</span>
                       <span className="font-bold text-charcoal-900 truncate max-w-[200px]">
                         {accountId}
                       </span>
@@ -654,3 +641,4 @@ export const DepositModal: React.FC<DepositModalProps> = ({
     </>
   );
 };
+

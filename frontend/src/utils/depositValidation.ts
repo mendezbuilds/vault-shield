@@ -93,3 +93,4 @@ export function getMaxSpendableNear(walletBalanceYocto: string | null): string {
     return '0';
   }
 }
+
