@@ -35,6 +35,10 @@ export interface WalletContextType {
     deposit?: string,
     gas?: string
   ) => Promise<{ success: boolean; txHash?: string | null; error?: string }>;
+  transferNativeNear: (
+    receiverId: string,
+    yoctoAmount: string
+  ) => Promise<{ success: boolean; txHash?: string | null; error?: string }>;
 }
 
 const WalletContext = createContext<WalletContextType | undefined>(undefined);
@@ -331,6 +335,58 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     }
   };
 
+  const transferNativeNear = async (
+    receiverId: string,
+    yoctoAmount: string
+  ): Promise<{ success: boolean; txHash?: string | null; error?: string }> => {
+    if (!accountId) {
+      return { success: false, error: 'Please connect a testnet wallet first' };
+    }
+
+    if (authType !== 'genuine_wallet') {
+      return {
+        success: false,
+        error: 'Native deposits require genuine Web3 wallet signing (Meteor Wallet or MyNearWallet). Simulated personas cannot execute native transfers.',
+      };
+    }
+
+    setTxStatus({
+      state: 'preparing',
+      message: `Preparing native NEAR transfer to ${receiverId}...`,
+    });
+
+    try {
+      setTxStatus({
+        state: 'signing',
+        message: `Requesting transfer authorization in ${walletId === 'meteor-wallet' ? 'Meteor Wallet' : 'MyNearWallet'} (${accountId})...`,
+      });
+
+      const hash = await nearWallet.transferNear(receiverId, yoctoAmount);
+
+      setTxStatus({
+        state: 'confirmed',
+        message: 'Native transfer successfully executed on NEAR Testnet!',
+        txHash: hash,
+      });
+
+      if (accountId) {
+        fetchBalanceForAccount(accountId).catch(console.warn);
+      }
+
+      return { success: true, txHash: hash };
+    } catch (err: any) {
+      const errMsg = err?.message || String(err) || 'Transaction execution error';
+      const isRejection = /reject|cancel|closed|user denied|not granted/i.test(errMsg);
+      const friendlyError = isRejection ? 'Transaction cancelled by user in wallet.' : errMsg;
+
+      setTxStatus({
+        state: 'failed',
+        error: friendlyError,
+      });
+      return { success: false, error: friendlyError };
+    }
+  };
+
   return (
     <WalletContext.Provider
       value={{
@@ -350,6 +406,7 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         refreshBalance,
         clearTxStatus,
         executeContractCall,
+        transferNativeNear,
       }}
     >
       {children}

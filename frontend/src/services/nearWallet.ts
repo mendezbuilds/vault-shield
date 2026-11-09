@@ -95,8 +95,48 @@ class NearWalletService {
       ],
     });
 
-    if (outcome && typeof outcome === 'object' && 'transaction' in outcome) {
-      return (outcome as any).transaction.hash;
+    if (outcome && typeof outcome === 'object') {
+      if ('transaction' in outcome && (outcome as any).transaction?.hash) {
+        return (outcome as any).transaction.hash;
+      }
+      if ('transaction_outcome' in outcome && (outcome as any).transaction_outcome?.id) {
+        return (outcome as any).transaction_outcome.id;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Executes a native NEAR token transfer using actionCreators.transfer (no contract function call).
+   */
+  public async transferNear(
+    receiverId: string,
+    yoctoAmount: string
+  ): Promise<string | null> {
+    if (!this.selector) await this.init();
+    if (!this.selector) throw new Error('Wallet selector not initialized');
+
+    const state = this.selector.store.getState();
+    const active = state.accounts.find(a => a.active) || state.accounts[0];
+    if (!active) throw new Error('No active wallet connected');
+
+    const walletId = state.selectedWalletId;
+    const wallet = await (walletId ? this.selector.wallet(walletId) : this.selector.wallet());
+    const outcome = await wallet.signAndSendTransaction({
+      signerId: active.accountId,
+      receiverId,
+      actions: [
+        actionCreators.transfer(BigInt(yoctoAmount)),
+      ],
+    });
+
+    if (outcome && typeof outcome === 'object') {
+      if ('transaction' in outcome && (outcome as any).transaction?.hash) {
+        return (outcome as any).transaction.hash;
+      }
+      if ('transaction_outcome' in outcome && (outcome as any).transaction_outcome?.id) {
+        return (outcome as any).transaction_outcome.id;
+      }
     }
     return null;
   }

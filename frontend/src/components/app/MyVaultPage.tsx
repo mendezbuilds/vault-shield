@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 import { VaultAccountOverview } from '../../types/contract';
 import { Modal } from '../common/Modal';
+import { DepositModal } from './DepositModal';
 import { formatNear, parseNearToYocto, getExplorerAccountUrl } from '../../utils/formatters';
 import { useWallet } from '../../context/WalletContext';
 import {
@@ -31,6 +32,7 @@ export const MyVaultPage: React.FC<MyVaultPageProps> = ({ overview, onRefresh })
   const { accountId, role, executeContractCall } = useWallet();
 
   // Modals state
+  const [isDepositModalOpen, setIsDepositModalOpen] = useState(false);
   const [isPolicyModalOpen, setIsPolicyModalOpen] = useState(false);
   const [isAddDestModalOpen, setIsAddDestModalOpen] = useState(false);
   const [isWithdrawModalOpen, setIsWithdrawModalOpen] = useState(false);
@@ -154,7 +156,24 @@ export const MyVaultPage: React.FC<MyVaultPageProps> = ({ overview, onRefresh })
         {/* Action Controls for Owner */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 sm:gap-3 shrink-0">
           {isOwner ? (
-            <div className="grid grid-cols-2 sm:flex sm:items-center gap-2.5 w-full sm:w-auto">
+            <div className="grid grid-cols-3 sm:flex sm:items-center gap-2.5 w-full sm:w-auto">
+              <button
+                data-testid="deposit-near-btn"
+                onClick={() => setIsDepositModalOpen(true)}
+                className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-near-dark hover:bg-near-green text-white text-xs font-bold shadow-soft transition-all touch-manipulation active:scale-[0.98]"
+              >
+                <Coins className="w-4 h-4 text-white" />
+                <span>Deposit NEAR</span>
+              </button>
+
+              <button
+                onClick={() => setIsWithdrawModalOpen(true)}
+                className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-surface-white hover:bg-ivory-warm text-charcoal-800 border border-border text-xs font-bold shadow-soft transition-all touch-manipulation"
+              >
+                <ArrowUpRight className="w-4 h-4 text-charcoal-700" />
+                <span>Withdraw</span>
+              </button>
+
               <button
                 onClick={() => setIsPauseConfirmOpen(true)}
                 className={`inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-xs font-bold shadow-soft transition-all touch-manipulation ${
@@ -175,20 +194,53 @@ export const MyVaultPage: React.FC<MyVaultPageProps> = ({ overview, onRefresh })
                   </>
                 )}
               </button>
-
-              <button
-                onClick={() => setIsWithdrawModalOpen(true)}
-                className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-surface-white hover:bg-ivory-warm text-charcoal-800 border border-border text-xs font-bold shadow-soft transition-all touch-manipulation"
-              >
-                <ArrowUpRight className="w-4 h-4 text-charcoal-700" />
-                <span>Withdraw</span>
-              </button>
             </div>
           ) : (
-            <div className="p-3 rounded-xl bg-ivory-warm border border-border text-center text-xs text-charcoal-500 font-mono">
-              Connect as Vault Owner to enable administrative controls
+            <div className="flex flex-col sm:flex-row items-center gap-2">
+              <button
+                data-testid="deposit-near-btn"
+                onClick={() => setIsDepositModalOpen(true)}
+                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-near-dark hover:bg-near-green text-white text-xs font-bold shadow-soft transition-all touch-manipulation w-full sm:w-auto"
+              >
+                <Coins className="w-4 h-4 text-white" />
+                <span>Deposit NEAR</span>
+              </button>
+              <div className="p-2 sm:p-2.5 rounded-xl bg-ivory-warm border border-border text-center text-[11px] text-charcoal-500 font-mono">
+                Connect as {overview.ownerId} to manage vault
+              </div>
             </div>
           )}
+        </div>
+      </div>
+
+      {/* 1.5 VAULT FUNDING & CAPITAL MANAGEMENT AREA */}
+      <div
+        data-testid="vault-funding-area"
+        className="p-5 sm:p-7 rounded-3xl bg-white/85 backdrop-blur-xl border border-white/90 shadow-card flex flex-col md:flex-row md:items-center justify-between gap-6 relative overflow-hidden"
+      >
+        <div className="space-y-1.5 flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-[9px] sm:text-[10px] font-mono font-bold uppercase tracking-widest text-near-dark bg-near-light px-2.5 py-0.5 rounded-full border border-near-green/30">
+              VAULT FUNDING // CUSTODIAL CAPITAL
+            </span>
+          </div>
+          <h3 className="text-base sm:text-xl font-extrabold text-charcoal-900 tracking-tight flex items-center gap-2">
+            <Coins className="w-5 h-5 text-near-dark shrink-0" />
+            <span>Vault Shield Operational Capital</span>
+          </h3>
+          <p className="text-xs text-charcoal-600 leading-relaxed font-sans max-w-2xl">
+            Fund the contract with native NEAR to replenish agent allowances. Inbound deposits immediately increase total vault reserves and liquid solvency under smart contract governance.
+          </p>
+        </div>
+
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 shrink-0">
+          <button
+            onClick={() => setIsDepositModalOpen(true)}
+            className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-near-dark hover:bg-near-green text-white text-xs font-bold tracking-tight shadow-soft transition-all touch-manipulation active:scale-[0.98]"
+          >
+            <Coins className="w-4 h-4 text-white" />
+            <span>Deposit NEAR to Vault</span>
+          </button>
         </div>
       </div>
 
@@ -588,6 +640,13 @@ export const MyVaultPage: React.FC<MyVaultPageProps> = ({ overview, onRefresh })
           </button>
         </div>
       </Modal>
+      {/* MODAL 5: Native NEAR Deposit */}
+      <DepositModal
+        isOpen={isDepositModalOpen}
+        onClose={() => setIsDepositModalOpen(false)}
+        overview={overview}
+        onRefresh={onRefresh}
+      />
     </motion.div>
   );
 };
