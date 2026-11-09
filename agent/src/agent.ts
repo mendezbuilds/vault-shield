@@ -5,8 +5,7 @@ import {
   PreflightResult,
   TransactionOutcomeStatus,
   ExecutionRecord,
-  RequestPaymentArgs,
-  ExecutionResult,
+  ReconciliationResult,
 } from './types.js';
 import {
   ContractViewProvider,
@@ -84,7 +83,8 @@ export class VaultAgent {
 
   constructor(
     customConfig?: Partial<AgentConfig>,
-    customViewProvider?: ContractViewProvider
+    customViewProvider?: ContractViewProvider,
+    customSigner?: AgentSigner
   ) {
     this.config = loadConfig(customConfig);
     this.viewProvider =
@@ -92,11 +92,12 @@ export class VaultAgent {
       new NearRpcContractViewProvider(
         this.config.rpcUrl,
         this.config.fallbackRpcUrl,
-        this.config.vaultContractId
+        this.config.vaultContractId,
+        this.config.rpcTimeoutMs
       );
-    this.signer = new AgentSigner(this.config);
+    this.signer = customSigner || new AgentSigner(this.config);
     this.ledger = new ExecutionLedger(this.config.ledgerPath);
-    this.lock = new ProcessLock(this.config.lockfilePath);
+    this.lock = new ProcessLock(this.config.lockfilePath, this.config.lockTtlMs);
   }
 
   public getConfig(): ReturnType<typeof getSafeConfig> {
@@ -155,12 +156,13 @@ export class VaultAgent {
 
   /**
    * Handles payment request execution lifecycle:
-   * 1. Concurrency lock acquisition
+   * 1. Concurrency lock acquisition with stale-lock recovery
    * 2. Idempotency deduplication
    * 3. Advisory pre-flight simulation
    * 4. Dry-run payload preview OR live broadcast (gated by Phase 1 boundary)
-   * 5. Receipt inspection and status determination
-   * 6. Lock release
+   * 5. Two-stage transaction construction with hash persistence BEFORE broadcast
+   * 6. Receipt inspection and status determination
+   * 7. Lock release
    */
   public async requestPayment(
     intentInput: {
@@ -201,7 +203,7 @@ export class VaultAgent {
               {
                 check: 'Local Intent Idempotency',
                 passed: false,
-                detail: `Task with Intent ID "${intent.intentId}" has already been processed. Replay rejected locally.`,
+                detail: `Task with Intent ID "${intent.intentId}" has already been processed or is pending. Replay rejected locally.`,
               },
             ],
             predictedRouting: 'DENIED',
@@ -251,18 +253,61 @@ export class VaultAgent {
         };
       }
 
-      // 5. Live On-Chain Broadcast (Phase 2 only)
-      const broadcastRes = await this.signer.signAndSendPayment(intent);
-      const txHash = broadcastRes.txHash;
+      // 5. Live On-Chain Broadcast with SEC-01 Pre-Persistence (Phase 2 only)
+      // Step A: Sign and derive transaction hash BEFORE broadcasting
+      const { txHash, signedTransaction, preview } = await this.signer.createSignedPaymentTransaction(intent);
 
+      // Step B: DURABLY PERSIST TRANSACTION HASH TO DISK BEFORE BROADCAST
       this.ledger.updateRecord(intent.intentId, {
         status: 'TRANSACTION_BROADCAST_PENDING',
         txHash,
       });
 
-      // Parse outcome from transaction receipts
-      const parsedOutcome = this.parseExecutionOutcome(broadcastRes.rawOutcome);
+      // Step C: Broadcast exact signed transaction with timeout handling
+      let rawOutcome: any;
+      try {
+        rawOutcome = await this.signer.broadcastSignedTransaction(signedTransaction);
+      } catch (broadcastErr: any) {
+        const errMsg = broadcastErr?.message || String(broadcastErr);
+        this.ledger.updateRecord(intent.intentId, {
+          status: 'UNKNOWN_UNRESOLVED',
+          errorMessage: `Broadcast timeout / network error: ${errMsg}`,
+        });
 
+        return {
+          status: 'UNKNOWN_UNRESOLVED',
+          intentId: intent.intentId,
+          txHash,
+          preview,
+          preflight: preflightResult,
+          message: `Broadcast timed out or encountered network error (${errMsg}). Transaction hash (${txHash}) is safely persisted. Run "agent reconcile" to determine final on-chain outcome.`,
+          error: errMsg,
+        };
+      }
+
+      // Step D: Parse outcome from transaction receipts (SEC-02)
+      const parsedOutcome = this.parseExecutionOutcome(rawOutcome);
+
+      // Step E: If Dispatched, inspect contract request view to verify downstream transfer execution
+      if (parsedOutcome.status === 'PAYMENT_DISPATCHED' && parsedOutcome.requestId !== undefined) {
+        try {
+          const reqView = await this.viewProvider.getRequest(parsedOutcome.requestId);
+          if (reqView) {
+            if (reqView.status === 'Executed') {
+              parsedOutcome.status = 'PAYMENT_EXECUTED';
+              parsedOutcome.message = `Payment auto-approved, dispatched, and confirmed executed on-chain (Request ID #${parsedOutcome.requestId}).`;
+            } else if (reqView.status === 'Failed') {
+              parsedOutcome.status = 'DOWNSTREAM_TRANSFER_FAILED';
+              parsedOutcome.message = `Payment dispatched but downstream transfer failed on-chain (Request ID #${parsedOutcome.requestId}). Reservation refunded.`;
+            }
+            // If still InFlight, it remains PAYMENT_DISPATCHED (interim)
+          }
+        } catch {
+          // If view query times out, keep interim PAYMENT_DISPATCHED state
+        }
+      }
+
+      // Step F: Persist final confirmed status in ledger
       this.ledger.updateRecord(intent.intentId, {
         status: parsedOutcome.status,
         requestId: parsedOutcome.requestId,
@@ -276,18 +321,172 @@ export class VaultAgent {
         intentId: intent.intentId,
         txHash,
         requestId: parsedOutcome.requestId,
+        preview,
         preflight: preflightResult,
         message: parsedOutcome.message,
         error: parsedOutcome.errorMessage,
       };
     } finally {
-      // 6. Always release process lock
+      // Always release process lock
       this.lock.release();
     }
   }
 
   /**
+   * Reconciles ambiguous or in-flight transaction records against NEAR RPC.
+   * NEVER blindly rebuilds or rebroadcasts transactions.
+   */
+  public async reconcilePending(targetIntentId?: string): Promise<ReconciliationResult[]> {
+    const results: ReconciliationResult[] = [];
+    const records = targetIntentId
+      ? [this.ledger.getRecord(targetIntentId)].filter(Boolean) as ExecutionRecord[]
+      : this.ledger.getPendingReconciliations();
+
+    for (const record of records) {
+      const prevStatus = record.status;
+
+      // 1. If requestId is known (e.g. was PAYMENT_DISPATCHED interim state)
+      if (record.requestId !== undefined) {
+        try {
+          const reqView = await this.viewProvider.getRequest(record.requestId);
+          if (reqView) {
+            if (reqView.status === 'Executed') {
+              this.ledger.updateRecord(record.intentId, { status: 'PAYMENT_EXECUTED' });
+              results.push({
+                intentId: record.intentId,
+                txHash: record.txHash,
+                previousStatus: prevStatus,
+                newStatus: 'PAYMENT_EXECUTED',
+                requestId: record.requestId,
+                message: `Downstream transfer confirmed executed on-chain (Request ID #${record.requestId}).`,
+                updated: true,
+              });
+              continue;
+            } else if (reqView.status === 'Failed') {
+              this.ledger.updateRecord(record.intentId, { status: 'DOWNSTREAM_TRANSFER_FAILED' });
+              results.push({
+                intentId: record.intentId,
+                txHash: record.txHash,
+                previousStatus: prevStatus,
+                newStatus: 'DOWNSTREAM_TRANSFER_FAILED',
+                requestId: record.requestId,
+                message: `Downstream transfer confirmed failed on-chain (Request ID #${record.requestId}). Reservation refunded.`,
+                updated: true,
+              });
+              continue;
+            } else if (reqView.status === 'Pending') {
+              this.ledger.updateRecord(record.intentId, { status: 'PENDING_OWNER_APPROVAL' });
+              results.push({
+                intentId: record.intentId,
+                txHash: record.txHash,
+                previousStatus: prevStatus,
+                newStatus: 'PENDING_OWNER_APPROVAL',
+                requestId: record.requestId,
+                message: `Request is in pending queue awaiting owner approval (Request ID #${record.requestId}).`,
+                updated: true,
+              });
+              continue;
+            } else if (reqView.status === 'InFlight') {
+              results.push({
+                intentId: record.intentId,
+                txHash: record.txHash,
+                previousStatus: prevStatus,
+                newStatus: 'PAYMENT_DISPATCHED',
+                requestId: record.requestId,
+                message: `Request is still InFlight on-chain awaiting transfer completion.`,
+                updated: false,
+              });
+              continue;
+            }
+          }
+        } catch (err: any) {
+          results.push({
+            intentId: record.intentId,
+            txHash: record.txHash,
+            previousStatus: prevStatus,
+            newStatus: prevStatus,
+            requestId: record.requestId,
+            message: `Contract view query failed (${err.message}). State remains unresolved.`,
+            updated: false,
+          });
+          continue;
+        }
+      }
+
+      // 2. If txHash is known, query on-chain transaction outcome via RPC
+      if (record.txHash && this.viewProvider.getTransactionStatus) {
+        try {
+          const txOutcome = await this.viewProvider.getTransactionStatus(record.txHash, this.config.agentAccountId);
+          if (!txOutcome) {
+            results.push({
+              intentId: record.intentId,
+              txHash: record.txHash,
+              previousStatus: prevStatus,
+              newStatus: prevStatus,
+              message: `Transaction hash (${record.txHash}) not yet indexed by RPC endpoint. Do not rebroadcast; re-check in a few blocks.`,
+              updated: false,
+            });
+            continue;
+          }
+
+          const parsed = this.parseExecutionOutcome(txOutcome);
+          let finalStatus = parsed.status;
+          let reqId = parsed.requestId;
+
+          // If dispatched, check downstream request view
+          if (finalStatus === 'PAYMENT_DISPATCHED' && reqId !== undefined) {
+            const reqView = await this.viewProvider.getRequest(reqId);
+            if (reqView?.status === 'Executed') finalStatus = 'PAYMENT_EXECUTED';
+            else if (reqView?.status === 'Failed') finalStatus = 'DOWNSTREAM_TRANSFER_FAILED';
+          }
+
+          this.ledger.updateRecord(record.intentId, {
+            status: finalStatus,
+            requestId: reqId,
+            originReason: parsed.originReason,
+            policyDenialReason: parsed.policyDenialReason,
+            errorMessage: parsed.errorMessage,
+          });
+
+          results.push({
+            intentId: record.intentId,
+            txHash: record.txHash,
+            previousStatus: prevStatus,
+            newStatus: finalStatus,
+            requestId: reqId,
+            message: `Transaction reconciled successfully: ${parsed.message}`,
+            updated: true,
+          });
+          continue;
+        } catch (err: any) {
+          results.push({
+            intentId: record.intentId,
+            txHash: record.txHash,
+            previousStatus: prevStatus,
+            newStatus: prevStatus,
+            message: `Error querying transaction status: ${err.message}. State remains unresolved.`,
+            updated: false,
+          });
+          continue;
+        }
+      }
+
+      // 3. No txHash was recorded before crash
+      results.push({
+        intentId: record.intentId,
+        previousStatus: prevStatus,
+        newStatus: prevStatus,
+        message: `Cannot reconcile: transaction hash was not recorded before termination. Never rebroadcasting automatically.`,
+        updated: false,
+      });
+    }
+
+    return results;
+  }
+
+  /**
    * Distinguishes exact contract return values and execution receipts.
+   * Correctly maps Dispatched to an interim state rather than premature execution.
    */
   public parseExecutionOutcome(rawOutcome: any): {
     status: TransactionOutcomeStatus;
@@ -320,7 +519,7 @@ export class VaultAgent {
 
       if (!successValue) {
         return {
-          status: 'FUNCTION_CALL_EXECUTED',
+          status: 'UNKNOWN_UNRESOLVED',
           message: 'Function call completed without parsed ExecutionResult.',
         };
       }
@@ -329,9 +528,9 @@ export class VaultAgent {
       if ('Dispatched' in successValue) {
         const reqId = successValue.Dispatched.request_id;
         return {
-          status: 'PAYMENT_DISPATCHED_AND_EXECUTED',
+          status: 'PAYMENT_DISPATCHED',
           requestId: reqId,
-          message: `Payment auto-approved and dispatched on-chain (Request ID #${reqId}).`,
+          message: `Payment auto-approved and dispatched on-chain (Request ID #${reqId}). Awaiting downstream transfer confirmation.`,
         };
       }
 
@@ -339,7 +538,7 @@ export class VaultAgent {
         const reqId = successValue.Pending.request_id;
         const originReason = successValue.Pending.origin_reason;
         return {
-          status: 'PAYMENT_PENDING_APPROVAL',
+          status: 'PENDING_OWNER_APPROVAL',
           requestId: reqId,
           originReason,
           message: `Payment held in pending queue awaiting owner approval (Request ID #${reqId}, Reason: ${originReason}).`,
@@ -349,7 +548,7 @@ export class VaultAgent {
       if ('Denied' in successValue) {
         const denialReason = successValue.Denied.reason;
         return {
-          status: 'POLICY_DENIED_ON_CHAIN',
+          status: 'CONTRACT_DENIED',
           policyDenialReason: denialReason,
           message: `Payment rejected on-chain by contract policy engine: ${denialReason}.`,
           errorMessage: `On-chain policy denial: ${denialReason}`,
@@ -357,7 +556,7 @@ export class VaultAgent {
       }
 
       return {
-        status: 'FUNCTION_CALL_EXECUTED',
+        status: 'UNKNOWN_UNRESOLVED',
         message: 'Contract call succeeded with unclassified response.',
       };
     } catch (err: any) {
@@ -371,5 +570,9 @@ export class VaultAgent {
 
   public getLedger(): ExecutionLedger {
     return this.ledger;
+  }
+
+  public getViewProvider(): ContractViewProvider {
+    return this.viewProvider;
   }
 }

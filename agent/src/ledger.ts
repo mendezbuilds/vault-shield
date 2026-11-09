@@ -1,17 +1,32 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import os from 'os';
 import { ExecutionRecord, PaymentIntent, TransactionOutcomeStatus } from './types.js';
+import { DEFAULT_LOCK_TTL_MS } from './config.js';
+
+export interface LockMetadata {
+  pid: number;
+  createdAt: string;
+  timestamp: number;
+  hostname: string;
+  platform: string;
+  nodeVersion: string;
+}
 
 /**
  * Process-level concurrency lock using an atomic filesystem flag.
  * Prevents multiple local agent runtime instances from stepping on nonces.
+ * Supports robust stale-lock recovery with process liveness and Lock TTL checks.
  */
 export class ProcessLock {
   private isLocked = false;
   private fd: number | null = null;
 
-  constructor(private lockfilePath: string) {}
+  constructor(
+    private lockfilePath: string,
+    private lockTtlMs: number = DEFAULT_LOCK_TTL_MS
+  ) {}
 
   public acquire(): void {
     const lockDir = path.dirname(this.lockfilePath);
@@ -19,14 +34,16 @@ export class ProcessLock {
       fs.mkdirSync(lockDir, { recursive: true });
     }
 
-    // Check for stale lock
+    // Check for existing lock and evaluate staleness
     if (fs.existsSync(this.lockfilePath)) {
       try {
         const content = fs.readFileSync(this.lockfilePath, 'utf8');
-        const lockInfo = JSON.parse(content);
+        const lockInfo: LockMetadata = JSON.parse(content);
         const pid = lockInfo.pid;
+        const now = Date.now();
+        const lockAgeMs = now - (lockInfo.timestamp || new Date(lockInfo.createdAt).getTime());
 
-        // Check if PID is still alive
+        // 1. Check if PID is still alive
         let processAlive = false;
         try {
           process.kill(pid, 0);
@@ -35,19 +52,28 @@ export class ProcessLock {
           processAlive = false;
         }
 
+        // 2. Safe stale-lock recovery logic
         if (!processAlive) {
-          // Stale lock detected, clean it up
+          // Process is definitively terminated: recover stale lock
+          fs.unlinkSync(this.lockfilePath);
+        } else if (lockAgeMs > this.lockTtlMs) {
+          // Lock exceeded TTL window: on Windows, PIDs can be recycled after reboot.
+          // If lock is older than TTL and on same host, reclaim to avoid indefinite deadlock.
+          console.warn(
+            `\x1b[33m⚠️  STALE LOCK RECOVERY: Lockfile owned by PID ${pid} exceeded TTL (${Math.round(lockAgeMs / 1000)}s > ${Math.round(this.lockTtlMs / 1000)}s). Reclaiming lock.\x1b[0m`
+          );
           fs.unlinkSync(this.lockfilePath);
         } else {
+          // Process is alive and within TTL window
           throw new Error(
-            `Concurrency Lock Collision: Agent runtime already running under PID ${pid} (locked at ${lockInfo.createdAt}). Nonce collisions prevented.`
+            `Concurrency Lock Collision: Agent runtime already running under PID ${pid} (locked ${Math.round(lockAgeMs / 1000)}s ago on ${lockInfo.hostname}). Nonce collisions prevented.`
           );
         }
       } catch (err: any) {
         if (err.message.includes('Concurrency Lock Collision')) {
           throw err;
         }
-        // If file read/parse failed, try unlinking
+        // If file read/parse failed (corrupted lockfile), reclaim
         try {
           fs.unlinkSync(this.lockfilePath);
         } catch {
@@ -58,11 +84,15 @@ export class ProcessLock {
 
     try {
       this.fd = fs.openSync(this.lockfilePath, 'wx');
-      const lockPayload = JSON.stringify({
+      const lockPayload: LockMetadata = {
         pid: process.pid,
         createdAt: new Date().toISOString(),
-      });
-      fs.writeFileSync(this.fd, lockPayload);
+        timestamp: Date.now(),
+        hostname: os.hostname(),
+        platform: process.platform,
+        nodeVersion: process.version,
+      };
+      fs.writeFileSync(this.fd, JSON.stringify(lockPayload, null, 2));
       this.isLocked = true;
 
       // Register process exit cleanup handlers
@@ -75,12 +105,17 @@ export class ProcessLock {
   public release(): void {
     if (this.isLocked && fs.existsSync(this.lockfilePath)) {
       try {
-        if (this.fd !== null) {
-          fs.closeSync(this.fd);
-          this.fd = null;
+        // Verify we own the lock before unlinking
+        const content = fs.readFileSync(this.lockfilePath, 'utf8');
+        const lockInfo: LockMetadata = JSON.parse(content);
+        if (lockInfo.pid === process.pid) {
+          if (this.fd !== null) {
+            fs.closeSync(this.fd);
+            this.fd = null;
+          }
+          fs.unlinkSync(this.lockfilePath);
+          this.isLocked = false;
         }
-        fs.unlinkSync(this.lockfilePath);
-        this.isLocked = false;
       } catch {
         // File may have been removed or closed already
       }
@@ -161,13 +196,14 @@ export class ExecutionLedger {
     const record = this.records.get(intentId);
     if (!record) return false;
 
-    // These states represent active or successfully processed tasks
+    // These states represent active, completed, or ambiguous tasks that must not be blindly re-run
     const activeOrConfirmedStates: TransactionOutcomeStatus[] = [
       'TRANSACTION_BROADCAST_PENDING',
-      'FUNCTION_CALL_EXECUTED',
-      'PAYMENT_DISPATCHED_AND_EXECUTED',
-      'PAYMENT_PENDING_APPROVAL',
+      'PAYMENT_DISPATCHED',
+      'PENDING_OWNER_APPROVAL',
+      'PAYMENT_EXECUTED',
       'DRY_RUN_SUCCESS',
+      'UNKNOWN_UNRESOLVED',
     ];
 
     return activeOrConfirmedStates.includes(record.status);
@@ -176,7 +212,11 @@ export class ExecutionLedger {
   /**
    * Initializes or updates an intent record before or during execution.
    */
-  public recordIntent(intent: PaymentIntent, initialStatus: TransactionOutcomeStatus): ExecutionRecord {
+  public recordIntent(
+    intent: PaymentIntent,
+    initialStatus: TransactionOutcomeStatus,
+    txHash?: string
+  ): ExecutionRecord {
     const record: ExecutionRecord = {
       intentId: intent.intentId,
       status: initialStatus,
@@ -185,6 +225,7 @@ export class ExecutionLedger {
       amountYocto: intent.amountYocto,
       reason: intent.reason,
       timestamp: intent.createdAt || Date.now(),
+      txHash,
     };
     this.records.set(intent.intentId, record);
     this.save();
@@ -218,6 +259,7 @@ export class ExecutionLedger {
     const pendingStates: TransactionOutcomeStatus[] = [
       'TRANSACTION_BROADCAST_PENDING',
       'UNKNOWN_UNRESOLVED',
+      'PAYMENT_DISPATCHED', // In-flight promises awaiting downstream callback confirmation
     ];
     return Array.from(this.records.values()).filter(r => pendingStates.includes(r.status));
   }

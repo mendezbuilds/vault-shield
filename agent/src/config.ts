@@ -2,16 +2,27 @@ import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
 
-// Look for .env.agent first, then .env
+// Configuration paths
 const envAgentPath = path.resolve(process.cwd(), '.env.agent');
 const envDefaultPath = path.resolve(process.cwd(), '.env');
 
+// Opt-in check for plaintext secret loading from disk
+const isExplicitPlaintextOptIn = process.env.AGENT_ALLOW_PLAINTEXT_ENV === 'true';
+
 if (fs.existsSync(envAgentPath)) {
-  dotenv.config({ path: envAgentPath });
-} else if (fs.existsSync(envDefaultPath)) {
+  if (isExplicitPlaintextOptIn) {
+    dotenv.config({ path: envAgentPath });
+    console.warn(
+      '\x1b[33m⚠️  OPERATIONAL SECURITY WARNING: Loading credentials from plaintext file (.env.agent). In production environments, inject AGENT_PRIVATE_KEY directly into the container/OS environment without writing keys to disk.\x1b[0m'
+    );
+  } else if (!process.env.AGENT_PRIVATE_KEY) {
+    // Only inform if credentials are not already injected in process.env
+    console.warn(
+      '\x1b[36mℹ️  Notice: Local .env.agent detected. Plaintext file loading is disabled by default for security. Set AGENT_ALLOW_PLAINTEXT_ENV=true to enable file loading for development, or inject AGENT_PRIVATE_KEY directly into process.env.\x1b[0m'
+    );
+  }
+} else if (fs.existsSync(envDefaultPath) && isExplicitPlaintextOptIn) {
   dotenv.config({ path: envDefaultPath });
-} else {
-  dotenv.config();
 }
 
 export interface AgentConfig {
@@ -25,13 +36,26 @@ export interface AgentConfig {
   ledgerPath: string;
   lockfilePath: string;
   phase1StrictBoundary: boolean;
+  rpcTimeoutMs: number;
+  lockTtlMs: number;
+  allowPlaintextEnv: boolean;
 }
 
 export const EXPECTED_RESTRICTED_PUBLIC_KEY = 'ed25519:2H8EupC9ApTAPYPMu3a5DWxDdcX6X3wX22tcqsocV9Kq';
 export const DEFAULT_CONTRACT_ID = 'contract.vault-parent.testnet';
 export const DEFAULT_AGENT_ACCOUNT_ID = 'agent-a.vault-parent.testnet';
+export const DEFAULT_RPC_TIMEOUT_MS = 8000;
+export const DEFAULT_LOCK_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
 export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
+  const allowPlaintextEnv = overrides.allowPlaintextEnv !== undefined
+    ? overrides.allowPlaintextEnv
+    : (process.env.AGENT_ALLOW_PLAINTEXT_ENV === 'true');
+
+  if (allowPlaintextEnv && fs.existsSync(envAgentPath) && !overrides.privateKey) {
+    dotenv.config({ path: envAgentPath, override: false });
+  }
+
   const networkId = overrides.networkId || process.env.NEAR_NETWORK_ID || 'testnet';
   const rpcUrl = overrides.rpcUrl || process.env.NEAR_RPC_URL || 'https://rpc.testnet.near.org';
   const fallbackRpcUrl = overrides.fallbackRpcUrl || process.env.NEAR_FALLBACK_RPC_URL || 'https://test.rpc.fastnear.com';
@@ -44,6 +68,8 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   const phase1StrictBoundary = overrides.phase1StrictBoundary !== undefined
     ? overrides.phase1StrictBoundary
     : process.env.AGENT_PHASE1_STRICT_BOUNDARY !== 'false';
+  const rpcTimeoutMs = overrides.rpcTimeoutMs || (process.env.AGENT_RPC_TIMEOUT_MS ? Number(process.env.AGENT_RPC_TIMEOUT_MS) : DEFAULT_RPC_TIMEOUT_MS);
+  const lockTtlMs = overrides.lockTtlMs || (process.env.AGENT_LOCK_TTL_MS ? Number(process.env.AGENT_LOCK_TTL_MS) : DEFAULT_LOCK_TTL_MS);
 
   return {
     networkId,
@@ -56,6 +82,9 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     ledgerPath,
     lockfilePath,
     phase1StrictBoundary,
+    rpcTimeoutMs,
+    lockTtlMs,
+    allowPlaintextEnv,
   };
 }
 

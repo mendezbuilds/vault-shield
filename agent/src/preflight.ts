@@ -3,6 +3,7 @@ import {
   DailyBucketView,
   PreflightResult,
   PreflightCheckItem,
+  PaymentRequestView,
   MIN_TTL_NANOS,
   MAX_TTL_NANOS,
   DEFAULT_TTL_NANOS,
@@ -10,7 +11,7 @@ import {
   MAX_AGENT_PENDING,
   PaymentIntent,
 } from './types.js';
-import { AgentConfig } from './config.js';
+import { AgentConfig, DEFAULT_RPC_TIMEOUT_MS } from './config.js';
 
 export interface ContractViewProvider {
   isPaused(): Promise<boolean>;
@@ -20,16 +21,20 @@ export interface ContractViewProvider {
   getAvailableLiquidBalance(): Promise<string>;
   getAgentPendingCount(agentId: string): Promise<number>;
   getGlobalPendingCount(): Promise<number>;
+  getRequest(requestId: number): Promise<PaymentRequestView | null>;
+  getTransactionStatus?(txHash: string, signerAccountId: string): Promise<any>;
 }
 
 /**
  * Standard RPC-based contract view provider using JSON-RPC query:call_function.
+ * Enforces configurable bounded timeouts and fail-closed error handling.
  */
 export class NearRpcContractViewProvider implements ContractViewProvider {
   constructor(
     private rpcUrl: string,
     private fallbackRpcUrl: string,
-    private contractId: string
+    private contractId: string,
+    private timeoutMs: number = DEFAULT_RPC_TIMEOUT_MS
   ) {}
 
   private async callViewMethod<T>(methodName: string, args: Record<string, any> = {}): Promise<T> {
@@ -37,6 +42,9 @@ export class NearRpcContractViewProvider implements ContractViewProvider {
     let lastError: Error | null = null;
 
     for (const url of urls) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(new Error(`RPC view call timeout after ${this.timeoutMs}ms`)), this.timeoutMs);
+
       try {
         const res = await fetch(url, {
           method: 'POST',
@@ -53,6 +61,7 @@ export class NearRpcContractViewProvider implements ContractViewProvider {
               args_base64: Buffer.from(JSON.stringify(args)).toString('base64'),
             },
           }),
+          signal: controller.signal,
         });
 
         if (!res.ok) {
@@ -68,12 +77,26 @@ export class NearRpcContractViewProvider implements ContractViewProvider {
           throw new Error(`Invalid view response format from ${url}`);
         }
 
-        const rawBytes = Buffer.from(data.result.result);
-        const parsed = JSON.parse(rawBytes.toString('utf8'));
+        let rawBytes: Buffer;
+        try {
+          rawBytes = Buffer.from(data.result.result);
+        } catch {
+          throw new Error(`Malformed RPC view response: invalid base64 result from ${url}`);
+        }
+
+        let parsed: any;
+        try {
+          parsed = JSON.parse(rawBytes.toString('utf8'));
+        } catch {
+          throw new Error(`Malformed RPC view response: invalid JSON payload from ${url}`);
+        }
+
         return parsed as T;
       } catch (err: any) {
         lastError = err;
         continue;
+      } finally {
+        clearTimeout(timer);
       }
     }
 
@@ -107,6 +130,56 @@ export class NearRpcContractViewProvider implements ContractViewProvider {
   async getGlobalPendingCount(): Promise<number> {
     return this.callViewMethod<number>('get_global_pending_count');
   }
+
+  async getRequest(requestId: number): Promise<PaymentRequestView | null> {
+    return this.callViewMethod<PaymentRequestView | null>('get_request', { request_id: requestId });
+  }
+
+  async getTransactionStatus(txHash: string, signerAccountId: string): Promise<any> {
+    const urls = [this.rpcUrl, this.fallbackRpcUrl];
+    let lastError: Error | null = null;
+
+    for (const url of urls) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(new Error(`RPC tx query timeout after ${this.timeoutMs}ms`)), this.timeoutMs);
+
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: `tx_${Date.now()}`,
+            method: 'tx',
+            params: [txHash, signerAccountId],
+          }),
+          signal: controller.signal,
+        });
+
+        if (!res.ok) {
+          throw new Error(`HTTP error ${res.status}: ${res.statusText}`);
+        }
+
+        const data: any = await res.json();
+        if (data.error) {
+          const errStr = JSON.stringify(data.error);
+          if (errStr.includes('UnknownTransaction') || (errStr.includes('Transaction') && errStr.includes("doesn't exist"))) {
+            return null;
+          }
+          throw new Error(`RPC error: ${errStr}`);
+        }
+
+        return data.result || null;
+      } catch (err: any) {
+        lastError = err;
+        continue;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    throw new Error(`Failed to query transaction status for ${txHash}: ${lastError?.message}`);
+  }
 }
 
 /**
@@ -129,7 +202,12 @@ export async function executePreflight(
   viewProvider?: ContractViewProvider
 ): Promise<PreflightResult> {
   const checks: PreflightCheckItem[] = [];
-  const provider = viewProvider || new NearRpcContractViewProvider(config.rpcUrl, config.fallbackRpcUrl, config.vaultContractId);
+  const provider = viewProvider || new NearRpcContractViewProvider(
+    config.rpcUrl,
+    config.fallbackRpcUrl,
+    config.vaultContractId,
+    config.rpcTimeoutMs
+  );
 
   // 1. Destination Syntax Check
   const validDest = isValidNearAccountId(intent.destination);

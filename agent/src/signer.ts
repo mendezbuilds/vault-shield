@@ -1,4 +1,4 @@
-import { KeyPair, KeyPairSigner, Account, JsonRpcProvider, actions, PublicKey } from 'near-api-js';
+import { KeyPair, KeyPairSigner, Account, JsonRpcProvider, actions, baseEncode } from 'near-api-js';
 import { AgentConfig, EXPECTED_RESTRICTED_PUBLIC_KEY } from './config.js';
 import { PaymentIntent, RequestPaymentArgs, DEFAULT_TTL_NANOS } from './types.js';
 
@@ -30,8 +30,14 @@ export function validateRestrictedKey(keyPair: KeyPair, expectedPublicKey: strin
 
 /**
  * Serializes standard request_payment arguments strictly conforming to the Rust contract interface.
+ * Enforces positive amount validation as defense-in-depth.
  */
 export function buildPaymentArgs(intent: PaymentIntent): RequestPaymentArgs {
+  const amountBn = BigInt(intent.amountYocto);
+  if (amountBn <= 0n) {
+    throw new Error('Security Violation: Attached payment amount must be greater than zero yoctoNEAR.');
+  }
+
   const ttlNanos = intent.ttlSeconds ? intent.ttlSeconds * 1_000_000_000 : DEFAULT_TTL_NANOS;
   return {
     destination: intent.destination,
@@ -71,6 +77,7 @@ export function buildRestrictedFunctionCallAction(args: RequestPaymentArgs) {
 
 /**
  * Dedicated restricted signer for agent-a.vault-parent.testnet.
+ * Implements two-stage signing so transaction hashes are derived and persisted BEFORE broadcast.
  */
 export class AgentSigner {
   private keyPair: KeyPair | null = null;
@@ -133,7 +140,54 @@ export class AgentSigner {
   }
 
   /**
-   * Broadcasts a transaction using the restricted key.
+   * Constructs and signs the exact transaction locally.
+   * Derives the Base58 transaction hash BEFORE any network broadcast is initiated.
+   */
+  public async createSignedPaymentTransaction(intent: PaymentIntent): Promise<{
+    txHash: string;
+    signedTransaction: any;
+    preview: SignedPayloadPreview;
+  }> {
+    if (!this.hasSigningCapability() || !this.account || !this.signer) {
+      throw new Error('Signer missing valid restricted key credentials. Injected AGENT_PRIVATE_KEY is required.');
+    }
+
+    const args = buildPaymentArgs(intent);
+    const action = buildRestrictedFunctionCallAction(args);
+
+    const tx = await this.account.createTransaction({
+      receiverId: this.config.vaultContractId,
+      actions: [action],
+      publicKey: await this.signer.getPublicKey(),
+    });
+
+    const { txHash, signedTransaction } = await this.signer.signTransaction(tx);
+    const txHashBase58 = baseEncode(txHash);
+    const preview = this.previewPayload(intent);
+
+    return {
+      txHash: txHashBase58,
+      signedTransaction,
+      preview,
+    };
+  }
+
+  /**
+   * Broadcasts a previously signed transaction to NEAR RPC.
+   * Throws if phase1StrictBoundary is active.
+   */
+  public async broadcastSignedTransaction(signedTransaction: any): Promise<any> {
+    if (this.config.phase1StrictBoundary) {
+      throw new Error(
+        'Strict Phase 1 Execution Boundary Active: Live on-chain transaction broadcasting is prohibited in this milestone. Use --dry-run or inspect the payload preview.'
+      );
+    }
+
+    return await this.provider.sendTransactionUntil(signedTransaction, 'FINAL');
+  }
+
+  /**
+   * Broadcasts a transaction using two-stage signing.
    * Throws if phase1StrictBoundary is active or key is missing.
    */
   public async signAndSendPayment(intent: PaymentIntent): Promise<{ txHash: string; rawOutcome: any }> {
@@ -143,19 +197,9 @@ export class AgentSigner {
       );
     }
 
-    if (!this.hasSigningCapability() || !this.account) {
-      throw new Error('Signer missing valid restricted key credentials. Injected AGENT_PRIVATE_KEY is required.');
-    }
+    const { txHash, signedTransaction } = await this.createSignedPaymentTransaction(intent);
+    const outcome = await this.broadcastSignedTransaction(signedTransaction);
 
-    const args = buildPaymentArgs(intent);
-    const action = buildRestrictedFunctionCallAction(args);
-
-    const outcome = await this.account.signAndSendTransaction({
-      receiverId: this.config.vaultContractId,
-      actions: [action],
-    });
-
-    const txHash = outcome.transaction_outcome?.id || (outcome as any).transaction?.hash;
     return {
       txHash,
       rawOutcome: outcome,

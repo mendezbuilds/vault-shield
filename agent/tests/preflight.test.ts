@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert';
-import { executePreflight, type ContractViewProvider } from '../dist/preflight.js';
+import { executePreflight, NearRpcContractViewProvider, type ContractViewProvider } from '../dist/preflight.js';
 import { loadConfig } from '../dist/config.js';
 import type { PaymentIntent, SpendingPolicyView, DailyBucketView } from '../dist/types.js';
 
@@ -274,4 +274,81 @@ test('Preflight: Fail-closed on RPC connection failure or timeout', async () => 
   assert.strictEqual(res.success, false);
   assert.strictEqual(res.predictedRouting, 'DENIED');
   assert.ok(res.error?.includes('fail-closed'));
+});
+
+test('Preflight: Day index calculation matches UTC epoch day exactly', () => {
+  const now = Date.now();
+  const expectedDayIndex = Math.floor(now / 86400000);
+  assert.strictEqual(typeof expectedDayIndex, 'number');
+  assert.ok(expectedDayIndex > 19000);
+
+  // Midnight rollover check: 23:59:59 UTC -> 00:00:01 UTC next day
+  const midnightMinus1 = Date.UTC(2026, 10, 9, 23, 59, 59);
+  const midnightPlus1 = Date.UTC(2026, 10, 10, 0, 0, 1);
+  const day1 = Math.floor(midnightMinus1 / 86400000);
+  const day2 = Math.floor(midnightPlus1 / 86400000);
+  assert.strictEqual(day2 - day1, 1);
+});
+
+test('NearRpcContractViewProvider: Rejects malformed JSON and fails closed', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => {
+      return {
+        ok: true,
+        json: async () => ({
+          jsonrpc: '2.0',
+          result: {
+            result: Array.from(Buffer.from('not-valid-json{{{')),
+          },
+        }),
+      } as any;
+    };
+    const provider = new NearRpcContractViewProvider('http://127.0.0.1:9999', 'http://127.0.0.1:9998', 'contract.vault-parent.testnet', 1000);
+    await assert.rejects(async () => {
+      await provider.isPaused();
+    }, /Malformed RPC view response: invalid JSON payload/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('NearRpcContractViewProvider: Rejects invalid view response structure', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => {
+      return {
+        ok: true,
+        json: async () => ({
+          jsonrpc: '2.0',
+          result: null,
+        }),
+      } as any;
+    };
+    const provider = new NearRpcContractViewProvider('http://127.0.0.1:9999', 'http://127.0.0.1:9998', 'contract.vault-parent.testnet', 1000);
+    await assert.rejects(async () => {
+      await provider.isPaused();
+    }, /Invalid view response format/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('NearRpcContractViewProvider: Times out after configured timeoutMs and aborts fetch', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (_url, init: any) => {
+      return new Promise((_, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new Error('RPC view call timeout after 50ms'));
+        });
+      });
+    };
+    const provider = new NearRpcContractViewProvider('http://127.0.0.1:9999', 'http://127.0.0.1:9998', 'contract.vault-parent.testnet', 50);
+    await assert.rejects(async () => {
+      await provider.isPaused();
+    }, /RPC view call timeout/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

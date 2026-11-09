@@ -39,6 +39,8 @@ function printHelp(): void {
   console.log('      Run advisory read-only policy simulation against contract invariants.\n');
   console.log('  request --dest <id> --amount <near> --reason <text> [--dry-run] [--intent-id <id>]');
   console.log('      Formulate, validate, and preview/dispatch a payment request.\n');
+  console.log('  reconcile [--intent-id <id>]');
+  console.log('      Reconcile unresolved or in-flight transaction records against NEAR RPC.\n');
   console.log('Options:');
   console.log('  --dest <account_id>     Target recipient NEAR account ID');
   console.log('  --amount <near>         Payment amount in NEAR (e.g. 0.15)');
@@ -205,9 +207,35 @@ async function handleRequest(agent: VaultAgent, options: Record<string, string |
   }
   console.log('================================================================');
 
-  if (result.status === 'LOCAL_PREFLIGHT_REJECTED' || result.status === 'POLICY_DENIED_ON_CHAIN') {
+  if (result.status === 'LOCAL_PREFLIGHT_REJECTED' || result.status === 'CONTRACT_DENIED') {
     process.exit(1);
   }
+}
+
+async function handleReconcile(agent: VaultAgent, options: Record<string, string | boolean>): Promise<void> {
+  printBanner();
+  const targetId = options['intent-id'] as string | undefined;
+  console.log(`RUNNING TRANSACTION RECONCILIATION${targetId ? ` FOR INTENT: ${targetId}` : ' FOR ALL UNRESOLVED INTENTS'}...\n`);
+
+  const results = await agent.reconcilePending(targetId);
+
+  if (results.length === 0) {
+    console.log('✅ No pending or unresolved transactions require reconciliation.');
+    console.log('================================================================');
+    return;
+  }
+
+  console.log(`RECONCILIATION RESULTS (${results.length} record(s) processed):\n`);
+  for (const r of results) {
+    const icon = r.updated ? '🔄 [UPDATED]' : '⏸️  [UNRESOLVED]';
+    console.log(`${icon} Intent ID:       ${r.intentId}`);
+    if (r.txHash) console.log(`   Transaction:     ${r.txHash}`);
+    if (r.requestId !== undefined) console.log(`   Request ID:      #${r.requestId}`);
+    console.log(`   Previous Status: ${r.previousStatus}`);
+    console.log(`   Current Status:  ${r.newStatus}`);
+    console.log(`   Detail:          ${r.message}\n`);
+  }
+  console.log('================================================================');
 }
 
 async function main(): Promise<void> {
@@ -223,6 +251,9 @@ async function main(): Promise<void> {
       break;
     case 'request':
       await handleRequest(agent, options);
+      break;
+    case 'reconcile':
+      await handleReconcile(agent, options);
       break;
     case 'help':
     default:

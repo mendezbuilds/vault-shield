@@ -142,11 +142,11 @@ export type TransactionOutcomeStatus =
   | 'LOCAL_PREFLIGHT_REJECTED'
   | 'DRY_RUN_SUCCESS'
   | 'TRANSACTION_BROADCAST_PENDING'
-  | 'FUNCTION_CALL_EXECUTED'
-  | 'PAYMENT_DISPATCHED_AND_EXECUTED'
-  | 'PAYMENT_PENDING_APPROVAL'
+  | 'PAYMENT_DISPATCHED'
+  | 'PENDING_OWNER_APPROVAL'
+  | 'PAYMENT_EXECUTED'
   | 'DOWNSTREAM_TRANSFER_FAILED'
-  | 'POLICY_DENIED_ON_CHAIN'
+  | 'CONTRACT_DENIED'
   | 'UNKNOWN_UNRESOLVED';
 
 export interface ExecutionRecord {
@@ -164,3 +164,14 @@ export interface ExecutionRecord {
   timestamp: number;
   lastReconciledAt?: number;
 }
+
+export interface ReconciliationResult {
+  intentId: string;
+  txHash?: string;
+  previousStatus: TransactionOutcomeStatus;
+  newStatus: TransactionOutcomeStatus;
+  message: string;
+  updated: boolean;
+  requestId?: number;
+}
+
