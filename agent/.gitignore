@@ -1,0 +1,28 @@
+# ==============================================================================
+# VAULT SHIELD AGENT RUNTIME - GITIGNORE
+# ==============================================================================
+
+# Dependencies
+node_modules/
+package-lock.json.bak
+
+# Compilation output
+dist/
+*.tsbuildinfo
+
+# Secret keys & environment files (CRITICAL SECURITY BOUNDARY)
+.env
+.env.*
+!.env.agent.example
+*.key
+*.pem
+credentials.json
+*.seed
+
+# Local process lockfiles & ephemeral data
+*.lock
+.agent.lock
+data/*.lock
+data/*.json
+!data/.gitkeep
+tests/temp/

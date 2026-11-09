@@ -1,0 +1,24 @@
+{
+  "name": "vault-shield-agent",
+  "version": "0.1.0",
+  "description": "Alpha Autonomous Agent Runtime for Vault Shield on NEAR Protocol",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "agent": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/**/*.test.ts",
+    "agent": "node dist/cli.js"
+  },
+  "dependencies": {
+    "dotenv": "16.4.7",
+    "near-api-js": "7.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "5.8.2"
+  }
+}

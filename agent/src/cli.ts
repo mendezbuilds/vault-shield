@@ -1,0 +1,237 @@
+#!/usr/bin/env node
+import { VaultAgent, parseNearToYocto, formatYoctoToNear } from './agent.js';
+import { generateIntentId } from './ledger.js';
+
+function parseArgs(args: string[]): { command: string; options: Record<string, string | boolean> } {
+  const command = args[0] || 'help';
+  const options: Record<string, string | boolean> = {};
+
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith('--')) {
+      const key = arg.slice(2);
+      const nextArg = args[i + 1];
+      if (nextArg && !nextArg.startsWith('--')) {
+        options[key] = nextArg;
+        i++;
+      } else {
+        options[key] = true;
+      }
+    }
+  }
+
+  return { command, options };
+}
+
+function printBanner(): void {
+  console.log('================================================================');
+  console.log(' 🛡️  VAULT SHIELD — ALPHA AUTONOMOUS AGENT RUNTIME (CLI)');
+  console.log('================================================================');
+}
+
+function printHelp(): void {
+  printBanner();
+  console.log('Usage: agent <command> [options]\n');
+  console.log('Commands:');
+  console.log('  status');
+  console.log('      Display live contract policy, solvency, and restricted key state.\n');
+  console.log('  preflight --dest <id> --amount <near> [--reason <text>] [--ttl <seconds>]');
+  console.log('      Run advisory read-only policy simulation against contract invariants.\n');
+  console.log('  request --dest <id> --amount <near> --reason <text> [--dry-run] [--intent-id <id>]');
+  console.log('      Formulate, validate, and preview/dispatch a payment request.\n');
+  console.log('Options:');
+  console.log('  --dest <account_id>     Target recipient NEAR account ID');
+  console.log('  --amount <near>         Payment amount in NEAR (e.g. 0.15)');
+  console.log('  --reason <text>         Audit reason description');
+  console.log('  --dry-run               Run simulation and payload construction without broadcast');
+  console.log('  --ttl <seconds>         Optional request TTL in seconds (300 to 86400)');
+  console.log('  --intent-id <id>        Custom unique intent ID for idempotency tracking\n');
+  console.log('Strict Execution Boundary:');
+  console.log('  In Phase 1, all mutations are confined to dry-run simulation mode.');
+  console.log('================================================================');
+}
+
+async function handleStatus(agent: VaultAgent): Promise<void> {
+  printBanner();
+  console.log('Retrieving on-chain status from NEAR Public Testnet...\n');
+
+  try {
+    const status = await agent.getStatus();
+
+    console.log('IDENTITY & ACCESS KEYS:');
+    console.log(`  Agent Account:          ${status.agentAccountId}`);
+    console.log(`  Vault Contract:         ${status.vaultContractId}`);
+    console.log(`  Network:                ${status.networkId}`);
+    console.log(`  Expected Restricted Key:${status.expectedPublicKey}`);
+    console.log(`  Loaded Signer Key:      ${status.signerPublicKey || '(None loaded - read-only mode)'}`);
+    console.log(`  Signing Capability:     ${status.hasSigningKey ? '✅ ACTIVE (Restricted Key)' : '⚠️ READ-ONLY (No Key Injected)'}`);
+    console.log(`  Agent Authorization:    ${status.isAgentAuthorized ? '✅ AUTHORIZED ON-CHAIN' : '❌ NOT AUTHORIZED'}`);
+
+    console.log('\nPOLICY & CIRCUIT BREAKER:');
+    console.log(`  Vault Circuit Breaker:  ${status.isVaultPaused ? '🚨 PAUSED' : '🟢 ACTIVE (Unpaused)'}`);
+    console.log(`  Max Per Transaction:   ${status.maxPerTxNear} NEAR`);
+    console.log(`  Daily Spending Cap:     ${status.dailyCapNear} NEAR`);
+    console.log(`  Auto-Approval Cap:      ${status.autoApprovalThresholdNear} NEAR`);
+    console.log(`  Allowlisted Merchants:  [ ${status.destinationAllowlist.join(', ')} ]`);
+
+    console.log('\nSOLVENCY & QUEUES:');
+    console.log(`  Available Liquid:       ${status.availableLiquidNear} NEAR`);
+    console.log(`  Today's Spent:          ${status.dailySpentNear} NEAR`);
+    console.log(`  Today's Reserved:       ${status.dailyReservedNear} NEAR`);
+    console.log(`  Agent Pending Queue:    ${status.agentPendingCount} / 2 Slots`);
+    console.log(`  Global Pending Queue:   ${status.globalPendingCount} / 32 Slots`);
+    console.log('================================================================');
+  } catch (err: any) {
+    console.error(`\n❌ Error fetching agent status: ${err.message}`);
+    process.exit(1);
+  }
+}
+
+async function handlePreflight(agent: VaultAgent, options: Record<string, string | boolean>): Promise<void> {
+  printBanner();
+  const dest = options.dest as string;
+  const amount = options.amount as string;
+  const reason = (options.reason as string) || 'Advisory Pre-flight Simulation';
+  const ttl = options.ttl ? Number(options.ttl) : undefined;
+
+  if (!dest || !amount) {
+    console.error('❌ Missing required flags: --dest <account_id> and --amount <near> are required.\n');
+    printHelp();
+    process.exit(1);
+  }
+
+  let amountYocto: string;
+  try {
+    amountYocto = parseNearToYocto(amount);
+  } catch (err: any) {
+    console.error(`❌ Amount error: ${err.message}`);
+    process.exit(1);
+  }
+
+  const intent = {
+    intentId: generateIntentId('preflight'),
+    destination: dest,
+    amountNear: amount,
+    amountYocto,
+    reason,
+    ttlSeconds: ttl,
+    createdAt: Date.now(),
+  };
+
+  console.log('RUNNING ADVISORY PRE-FLIGHT INVARIANT SIMULATION:');
+  console.log(`  Destination: ${dest}`);
+  console.log(`  Amount:      ${amount} NEAR (${amountYocto} yoctoNEAR)`);
+  console.log(`  Reason:      ${reason}\n`);
+
+  const result = await agent.preflight(intent);
+
+  console.log('POLICY CHECKS:');
+  for (const check of result.checks) {
+    const symbol = check.passed ? '✅ [PASS]' : '❌ [FAIL]';
+    console.log(`  ${symbol} ${check.check.padEnd(35)} : ${check.detail}`);
+  }
+
+  console.log('\nSIMULATION SUMMARY:');
+  console.log(`  Pre-Flight Status:   ${result.success ? '✅ PASSED' : '❌ FAILED'}`);
+  console.log(`  Predicted Routing:   ${result.predictedRouting || 'DENIED'}`);
+  if (result.predictedReason && result.predictedReason !== 'None') {
+    console.log(`  Predicted Reason:    ${result.predictedReason}`);
+  }
+  if (result.error) {
+    console.log(`  Denial Cause:        ${result.error}`);
+  }
+  console.log('================================================================');
+
+  if (!result.success) {
+    process.exit(1);
+  }
+}
+
+async function handleRequest(agent: VaultAgent, options: Record<string, string | boolean>): Promise<void> {
+  printBanner();
+  const dest = options.dest as string;
+  const amount = options.amount as string;
+  const reason = options.reason as string;
+  const isDryRun = options['dry-run'] !== undefined ? Boolean(options['dry-run']) : true;
+  const intentId = (options['intent-id'] as string) || generateIntentId();
+  const ttl = options.ttl ? Number(options.ttl) : undefined;
+
+  if (!dest || !amount || !reason) {
+    console.error('❌ Missing required flags: --dest, --amount, and --reason are all required.\n');
+    printHelp();
+    process.exit(1);
+  }
+
+  console.log('INITIATING PAYMENT REQUEST INTENT:');
+  console.log(`  Intent ID:   ${intentId}`);
+  console.log(`  Destination: ${dest}`);
+  console.log(`  Amount:      ${amount} NEAR`);
+  console.log(`  Reason:      ${reason}`);
+  console.log(`  Execution:   ${isDryRun ? 'DRY-RUN (Simulation & Payload Verification)' : 'LIVE'}\n`);
+
+  const result = await agent.requestPayment(
+    {
+      destination: dest,
+      amountNear: amount,
+      reason,
+      ttlSeconds: ttl,
+      intentId,
+    },
+    { dryRun: isDryRun }
+  );
+
+  console.log('LIFECYCLE OUTCOME:');
+  console.log(`  Status:      ${result.status}`);
+  console.log(`  Message:     ${result.message}`);
+
+  if (result.preview) {
+    console.log('\nVERIFIED SIGNED TRANSACTION PAYLOAD:');
+    console.log(`  Signer Account:    ${result.preview.signerId}`);
+    console.log(`  Receiver Account:  ${result.preview.receiverId}`);
+    console.log(`  Target Method:     ${result.preview.methodName}`);
+    console.log(`  Attached Gas:      ${result.preview.gas} (30 Tgas)`);
+    console.log(`  Attached Deposit:  ${result.preview.deposit} (0 yoctoNEAR - RESTRICTED KEY VERIFIED)`);
+    console.log(`  Arguments JSON:    ${JSON.stringify(result.preview.args, null, 2)}`);
+  }
+
+  if (result.txHash) {
+    console.log(`  Tx Hash:     ${result.txHash}`);
+  }
+  if (result.requestId !== undefined) {
+    console.log(`  Request ID:  #${result.requestId}`);
+  }
+  if (result.error) {
+    console.log(`  Error:       ${result.error}`);
+  }
+  console.log('================================================================');
+
+  if (result.status === 'LOCAL_PREFLIGHT_REJECTED' || result.status === 'POLICY_DENIED_ON_CHAIN') {
+    process.exit(1);
+  }
+}
+
+async function main(): Promise<void> {
+  const { command, options } = parseArgs(process.argv.slice(2));
+  const agent = new VaultAgent();
+
+  switch (command) {
+    case 'status':
+      await handleStatus(agent);
+      break;
+    case 'preflight':
+      await handlePreflight(agent, options);
+      break;
+    case 'request':
+      await handleRequest(agent, options);
+      break;
+    case 'help':
+    default:
+      printHelp();
+      break;
+  }
+}
+
+main().catch((err: any) => {
+  console.error(`\n❌ Unexpected execution error: ${err.message}`);
+  process.exit(1);
+});
