@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Modal } from './Modal';
 import { useWallet, KNOWN_PERSONAS } from '../../context/WalletContext';
-import { Wallet, Shield, Bot, UserX, CheckCircle2 } from 'lucide-react';
+import { nearWallet, SupportedWalletId } from '../../services/nearWallet';
+import { Wallet, Shield, Bot, UserX, CheckCircle2, Flame, ExternalLink } from 'lucide-react';
 
 interface WalletModalProps {
   isOpen: boolean;
@@ -9,12 +10,17 @@ interface WalletModalProps {
 }
 
 export const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose }) => {
-  const { accountId, authType, connectGenuineWallet, connectPersona } = useWallet();
+  const { accountId, authType, walletId, connectGenuineWallet, connectPersona } = useWallet();
   const [customAccount, setCustomAccount] = useState('');
+  const [isMeteorInstalled, setIsMeteorInstalled] = useState<boolean>(false);
 
-  const handleConnectGenuine = async () => {
+  useEffect(() => {
+    setIsMeteorInstalled(nearWallet.isMeteorExtensionInstalled());
+  }, [isOpen]);
+
+  const handleConnectGenuine = async (targetWallet: SupportedWalletId) => {
     onClose();
-    await connectGenuineWallet();
+    await connectGenuineWallet(targetWallet);
   };
 
   const handleSelectPersona = async (id: string) => {
@@ -34,7 +40,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose }) => 
       isOpen={isOpen}
       onClose={onClose}
       title="Connect NEAR Testnet Identity"
-      description="Authenticate with a genuine NEAR Web3 wallet or activate an evaluation persona for hackathon judging."
+      description="Authenticate with a genuine NEAR Web3 wallet (Meteor Wallet or MyNearWallet) or activate an evaluation persona for hackathon judging."
       maxWidth="md"
     >
       <div className="space-y-5 sm:space-y-6">
@@ -43,34 +49,90 @@ export const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose }) => 
           <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-charcoal-500 block mb-2">
             Section 1 &bull; Genuine Web3 Wallet Sign-In
           </span>
-          <div
-            onClick={handleConnectGenuine}
-            className={`p-3.5 sm:p-4 rounded-2xl border transition-all cursor-pointer flex items-center justify-between touch-manipulation ${
-              authType === 'genuine_wallet'
-                ? 'border-near-green bg-near-light/40 shadow-soft'
-                : 'border-border bg-surface-white hover:border-near-border hover:shadow-card'
-            }`}
-          >
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 sm:p-3 rounded-xl bg-surface-white border border-border text-near-dark shadow-soft shrink-0">
-                <Wallet className="w-5 h-5" />
-              </div>
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-                  <span className="text-xs sm:text-sm font-bold text-charcoal-900">MyNearWallet Testnet</span>
-                  <span className="text-[9px] sm:text-[10px] font-mono font-bold px-1.5 sm:px-2 py-0.5 rounded bg-near-light text-near-dark">
-                    WEB3 WALLET
-                  </span>
+          <div className="space-y-2.5">
+            {/* Meteor Wallet */}
+            <div
+              onClick={() => handleConnectGenuine('meteor-wallet')}
+              className={`p-3.5 sm:p-4 rounded-2xl border transition-all cursor-pointer flex items-center justify-between touch-manipulation ${
+                authType === 'genuine_wallet' && walletId === 'meteor-wallet'
+                  ? 'border-near-green bg-near-light/40 shadow-soft'
+                  : 'border-border bg-surface-white hover:border-near-border hover:shadow-card'
+              }`}
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="p-2.5 sm:p-3 rounded-xl bg-surface-white border border-border text-amber-500 shadow-soft shrink-0">
+                  <Flame className="w-5 h-5 text-amber-500" />
                 </div>
-                <p className="text-[11px] sm:text-xs text-charcoal-600 mt-0.5">
-                  Direct wallet authentication via official NEAR Wallet Selector.
-                </p>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                    <span className="text-xs sm:text-sm font-bold text-charcoal-900">Meteor Wallet</span>
+                    {isMeteorInstalled ? (
+                      <span className="text-[9px] sm:text-[10px] font-mono font-bold px-1.5 sm:px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        EXTENSION DETECTED
+                      </span>
+                    ) : (
+                      <span className="text-[9px] sm:text-[10px] font-mono font-bold px-1.5 sm:px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">
+                        EXTENSION / WEB APP
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] sm:text-xs text-charcoal-600 mt-0.5">
+                    {isMeteorInstalled
+                      ? 'One-click sign-in via Meteor browser extension.'
+                      : 'Connect via Meteor browser extension or web app.'}
+                  </p>
+                  {!isMeteorInstalled && (
+                    <div className="mt-1 flex items-center gap-2">
+                      <a
+                        href="https://wallet.meteorwallet.app"
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="text-[10px] font-mono text-near-dark hover:underline flex items-center gap-1"
+                      >
+                        <span>Install Meteor Extension</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
+                  )}
+                </div>
               </div>
+
+              {authType === 'genuine_wallet' && walletId === 'meteor-wallet' && (
+                <CheckCircle2 className="w-5 h-5 text-near-green shrink-0 ml-2" />
+              )}
             </div>
 
-            {authType === 'genuine_wallet' && (
-              <CheckCircle2 className="w-5 h-5 text-near-green shrink-0 ml-2" />
-            )}
+            {/* MyNearWallet */}
+            <div
+              onClick={() => handleConnectGenuine('my-near-wallet')}
+              className={`p-3.5 sm:p-4 rounded-2xl border transition-all cursor-pointer flex items-center justify-between touch-manipulation ${
+                authType === 'genuine_wallet' && walletId !== 'meteor-wallet'
+                  ? 'border-near-green bg-near-light/40 shadow-soft'
+                  : 'border-border bg-surface-white hover:border-near-border hover:shadow-card'
+              }`}
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="p-2.5 sm:p-3 rounded-xl bg-surface-white border border-border text-near-dark shadow-soft shrink-0">
+                  <Wallet className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                    <span className="text-xs sm:text-sm font-bold text-charcoal-900">MyNearWallet Testnet</span>
+                    <span className="text-[9px] sm:text-[10px] font-mono font-bold px-1.5 sm:px-2 py-0.5 rounded bg-near-light text-near-dark">
+                      WEB REDIRECT
+                    </span>
+                  </div>
+                  <p className="text-[11px] sm:text-xs text-charcoal-600 mt-0.5">
+                    Direct authentication via official NEAR Web Wallet.
+                  </p>
+                </div>
+              </div>
+
+              {authType === 'genuine_wallet' && walletId !== 'meteor-wallet' && (
+                <CheckCircle2 className="w-5 h-5 text-near-green shrink-0 ml-2" />
+              )}
+            </div>
           </div>
         </div>
 
@@ -108,27 +170,25 @@ export const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose }) => 
                       {isRevoked ? (
                         <UserX className="w-4 h-4 text-rose-600" />
                       ) : p.role === 'owner' ? (
-                        <Shield className="w-4 h-4 text-charcoal-900" />
+                        <Shield className="w-4 h-4 text-near-dark" />
                       ) : (
                         <Bot className="w-4 h-4 text-near-dark" />
                       )}
                     </div>
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="text-xs font-bold text-charcoal-900">{p.label}</span>
-                        <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-ivory-warm border border-border text-charcoal-600 font-bold">
+                        <span className="text-xs sm:text-sm font-bold text-charcoal-900">{p.label}</span>
+                        <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-ivory-warm border border-border text-charcoal-600">
                           {p.badge}
                         </span>
                       </div>
-                      <div className="text-[10px] sm:text-[11px] font-mono text-charcoal-500 mt-0.5 break-all">{p.id}</div>
-                      <p className="text-[10px] sm:text-[11px] text-charcoal-600 mt-1 leading-relaxed">{p.description}</p>
+                      <p className="text-[11px] sm:text-xs text-charcoal-600 font-mono mt-0.5 truncate">{p.id}</p>
+                      <p className="text-[11px] sm:text-xs text-charcoal-500 mt-1 leading-relaxed">{p.description}</p>
                     </div>
                   </div>
 
                   {isCurrent && (
-                    <span className="text-[10px] font-mono font-bold text-charcoal-900 uppercase shrink-0 ml-2">
-                      ACTIVE
-                    </span>
+                    <CheckCircle2 className="w-4 h-4 text-charcoal-900 shrink-0 ml-2 mt-1" />
                   )}
                 </div>
               );
@@ -136,10 +196,10 @@ export const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose }) => 
           </div>
         </div>
 
-        {/* Section 3: Custom Testnet Account */}
+        {/* Section 3: Custom Persona */}
         <div className="pt-4 border-t border-border">
           <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-charcoal-500 block mb-2">
-            Section 3 &bull; Enter Any NEAR Testnet Account
+            Section 3 &bull; Custom Evaluation Account
           </span>
           <form onSubmit={handleCustomConnect} className="flex gap-2">
             <input
@@ -147,14 +207,14 @@ export const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose }) => 
               placeholder="e.g. auditor.testnet"
               value={customAccount}
               onChange={e => setCustomAccount(e.target.value)}
-              className="flex-1 px-3 py-2.5 rounded-xl bg-ivory-warm border border-border text-xs sm:text-sm font-mono text-charcoal-900 placeholder:text-charcoal-400 focus:outline-none focus:border-charcoal-800"
+              className="flex-1 bg-surface-white border border-border rounded-xl px-3 py-2 text-xs font-mono text-charcoal-900 placeholder:text-charcoal-400 focus:outline-none focus:border-near-border focus:ring-1 focus:ring-near-border"
             />
             <button
               type="submit"
               disabled={!customAccount.trim()}
-              className="px-4 py-2.5 rounded-xl bg-near-dark hover:bg-near-green text-white text-xs font-bold disabled:opacity-40 shadow-soft transition-all touch-manipulation"
+              className="px-3.5 py-2 rounded-xl text-xs font-bold bg-ivory-warm border border-border text-charcoal-900 hover:bg-border transition-colors disabled:opacity-40"
             >
-              Connect
+              Simulate
             </button>
           </form>
         </div>

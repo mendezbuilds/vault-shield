@@ -28,7 +28,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   isRefreshing,
   onExitToLanding,
 }) => {
-  const { accountId, role, authType, isConnected, disconnect } = useWallet();
+  const { accountId, role, authType, walletId, isConnected, disconnect } = useWallet();
   const [isWalletModalOpen, setIsWalletModalOpen] = useState(false);
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
 
@@ -155,7 +155,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
                     <div className="flex items-center justify-between text-[10px] text-charcoal-400 uppercase font-mono">
                       <span>Connected Signer</span>
                       <span className="font-bold text-near-dark">
-                        {authType === 'genuine_wallet' ? 'WEB3 WALLET' : 'PERSONA'}
+                        {authType === 'genuine_wallet'
+                          ? (walletId === 'meteor-wallet' ? 'METEOR WALLET' : 'MYNEARWALLET')
+                          : 'PERSONA'}
                       </span>
                     </div>
                     <div className="text-xs font-mono text-charcoal-900 truncate font-bold mt-1">
@@ -192,6 +194,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             </div>
           ) : (
             <button
+              data-testid="connect-wallet-btn"
+              aria-label="Connect NEAR Wallet"
               onClick={() => setIsWalletModalOpen(true)}
               className="inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-1.5 sm:py-2 rounded-xl bg-near-dark hover:bg-near-green text-white text-xs font-bold tracking-tight shadow-soft transition-all touch-manipulation"
             >

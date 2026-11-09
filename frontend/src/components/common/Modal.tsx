@@ -51,6 +51,9 @@ export const Modal: React.FC<ModalProps> = ({
 
       {/* Modal Card */}
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
         className={`relative w-full ${maxWidthClass} max-h-[calc(100dvh-2rem)] flex flex-col rounded-3xl border border-border bg-surface-white shadow-elevation z-10 animate-in fade-in zoom-in-95 duration-150 overflow-hidden`}
       >
         {/* Header */}

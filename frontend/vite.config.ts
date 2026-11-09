@@ -180,6 +180,14 @@ function nearTxBridgePlugin(): Plugin {
 
 export default defineConfig({
   plugins: [react(), nearTxBridgePlugin()],
+  resolve: {
+    alias: {
+      buffer: 'buffer',
+    },
+  },
+  define: {
+    'global': 'window',
+  },
   server: {
     port: 3000,
     open: false

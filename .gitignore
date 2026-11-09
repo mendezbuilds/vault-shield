@@ -85,6 +85,7 @@ frontend/.vite/
 # ------------------------------------------------------------------------------
 # 7. Verification & Temporary Puppeteer Test Scripts
 # ------------------------------------------------------------------------------
+scratch/
 frontend/capture-all-screens.mjs
 frontend/capture-mobile-audit.mjs
 frontend/capture-modals.mjs

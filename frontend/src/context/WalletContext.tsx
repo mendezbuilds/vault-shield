@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { VAULT_CONTRACT_ID } from '../types/contract';
 import { nearRpc } from '../services/nearRpc';
-import { nearWallet } from '../services/nearWallet';
+import { nearWallet, SupportedWalletId } from '../services/nearWallet';
 
 export type UserRole = 'owner' | 'agent' | 'user';
 export type AuthType = 'genuine_wallet' | 'evaluation_persona';
@@ -17,10 +17,11 @@ interface WalletContextType {
   accountId: string | null;
   role: UserRole | null;
   authType: AuthType | null;
+  walletId: string | null;
   isConnected: boolean;
   isConnecting: boolean;
   txStatus: TxStatus;
-  connectGenuineWallet: () => Promise<void>;
+  connectGenuineWallet: (targetWallet?: SupportedWalletId) => Promise<void>;
   connectPersona: (targetAccountId: string) => Promise<void>;
   disconnect: () => Promise<void>;
   clearTxStatus: () => void;
@@ -72,16 +73,28 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [accountId, setAccountId] = useState<string | null>(null);
   const [role, setRole] = useState<UserRole | null>(null);
   const [authType, setAuthType] = useState<AuthType | null>(null);
+  const [walletId, setWalletId] = useState<string | null>(null);
   const [isConnecting, setIsConnecting] = useState<boolean>(false);
   const [txStatus, setTxStatus] = useState<TxStatus>({ state: 'idle' });
 
   // On mount, check if genuine wallet was signed in via redirect or saved persona
   useEffect(() => {
+    let subscription: { remove: () => void } | null = null;
+
     const initAuth = async () => {
       try {
-        await nearWallet.init();
+        const selector = await nearWallet.init();
+
+        subscription = selector.on('signedIn', async (event) => {
+          if (event.accounts && event.accounts.length > 0) {
+            setWalletId(event.walletId);
+            await resolveRole(event.accounts[0].accountId, 'genuine_wallet');
+          }
+        });
+
         const genuineAccount = nearWallet.getConnectedAccount();
         if (genuineAccount) {
+          setWalletId(nearWallet.getConnectedWalletId());
           await resolveRole(genuineAccount, 'genuine_wallet');
           return;
         }
@@ -97,6 +110,10 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     };
 
     initAuth();
+
+    return () => {
+      subscription?.remove();
+    };
   }, []);
 
   const resolveRole = async (targetId: string, type: AuthType) => {
@@ -127,19 +144,24 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     }
   };
 
-  const connectGenuineWallet = async () => {
+  const connectGenuineWallet = async (targetWallet: SupportedWalletId = 'my-near-wallet') => {
     setIsConnecting(true);
     try {
-      await nearWallet.connectMyNearWallet();
+      if (targetWallet === 'meteor-wallet') {
+        await nearWallet.connectMeteorWallet();
+      } else {
+        await nearWallet.connectMyNearWallet();
+      }
       const account = nearWallet.getConnectedAccount();
       if (account) {
+        setWalletId(targetWallet);
         await resolveRole(account, 'genuine_wallet');
       }
     } catch (err: any) {
-      console.error('Genuine NEAR Wallet connection failed:', err);
+      console.error(`Genuine NEAR Wallet (${targetWallet}) connection failed:`, err);
       setTxStatus({
         state: 'failed',
-        error: err?.message || 'Failed to authenticate with NEAR Wallet',
+        error: err?.message || `Failed to authenticate with ${targetWallet === 'meteor-wallet' ? 'Meteor Wallet' : 'MyNearWallet'}`,
       });
     } finally {
       setIsConnecting(false);
@@ -162,6 +184,7 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setAccountId(null);
     setRole(null);
     setAuthType(null);
+    setWalletId(null);
     localStorage.removeItem(STORAGE_ACCOUNT_KEY);
     localStorage.removeItem(STORAGE_AUTH_TYPE_KEY);
     setTxStatus({ state: 'idle' });
@@ -252,6 +275,7 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         accountId,
         role,
         authType,
+        walletId,
         isConnected: Boolean(accountId),
         isConnecting,
         txStatus,
