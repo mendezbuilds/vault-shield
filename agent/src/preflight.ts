@@ -4,6 +4,7 @@ import {
   PreflightResult,
   PreflightCheckItem,
   PaymentRequestView,
+  ReconciledTombstoneView,
   MIN_TTL_NANOS,
   MAX_TTL_NANOS,
   DEFAULT_TTL_NANOS,
@@ -22,6 +23,7 @@ export interface ContractViewProvider {
   getAgentPendingCount(agentId: string): Promise<number>;
   getGlobalPendingCount(): Promise<number>;
   getRequest(requestId: number): Promise<PaymentRequestView | null>;
+  getTombstone?(requestId: number): Promise<ReconciledTombstoneView | null>;
   getTransactionStatus?(txHash: string, signerAccountId: string): Promise<any>;
 }
 
@@ -133,6 +135,10 @@ export class NearRpcContractViewProvider implements ContractViewProvider {
 
   async getRequest(requestId: number): Promise<PaymentRequestView | null> {
     return this.callViewMethod<PaymentRequestView | null>('get_request', { request_id: requestId });
+  }
+
+  async getTombstone(requestId: number): Promise<ReconciledTombstoneView | null> {
+    return this.callViewMethod<ReconciledTombstoneView | null>('get_tombstone', { request_id: requestId });
   }
 
   async getTransactionStatus(txHash: string, signerAccountId: string): Promise<any> {

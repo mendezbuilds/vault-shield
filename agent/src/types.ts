@@ -76,6 +76,15 @@ export interface PaymentRequestView {
   dispatched_at?: number | null;
 }
 
+export interface ReconciledTombstoneView {
+  request_id: number;
+  original_bucket: number;
+  amount: string;              // yoctoNEAR string
+  attested_resolution: 'Executed' | 'Failed';
+  reconciled_at: number;       // nanoseconds timestamp
+  evidence_tx_hash: string;
+}
+
 // Result returned by contract request_payment invocation
 export type ExecutionResult =
   | { Dispatched: { request_id: number } }
@@ -146,6 +155,8 @@ export type TransactionOutcomeStatus =
   | 'PENDING_OWNER_APPROVAL'
   | 'PAYMENT_EXECUTED'
   | 'DOWNSTREAM_TRANSFER_FAILED'
+  | 'REQUEST_REJECTED'
+  | 'REQUEST_EXPIRED'
   | 'CONTRACT_DENIED'
   | 'UNKNOWN_UNRESOLVED';
 

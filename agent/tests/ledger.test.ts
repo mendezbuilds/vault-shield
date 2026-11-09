@@ -176,3 +176,96 @@ test('Ledger: Treats UNKNOWN_UNRESOLVED as active duplicate and surfaces in getP
 
   if (fs.existsSync(ledgerFile)) fs.unlinkSync(ledgerFile);
 });
+
+test('Ledger: reload() safely preserves records and ignores interrupted .tmp writes', () => {
+  const ledgerFile = path.resolve(tempDir, `ledger_tmp_interrupted_${Date.now()}.json`);
+  const ledger = new ExecutionLedger(ledgerFile);
+
+  const intent: PaymentIntent = {
+    intentId: 'intent_persisted_safely',
+    destination: 'merchant.vault-parent.testnet',
+    amountNear: '0.2',
+    amountYocto: '200000000000000000000000',
+    reason: 'Interruption test',
+    createdAt: Date.now(),
+  };
+
+  ledger.recordIntent(intent, 'TRANSACTION_BROADCAST_PENDING', 'tx_hash_safe');
+
+  // Simulate process interrupted mid-write leaving a partial .tmp file
+  const tmpFile = `${ledgerFile}.tmp`;
+  fs.writeFileSync(tmpFile, '{"incomplete_json": [', 'utf8');
+
+  // Reload should safely read the main intact ledger file
+  ledger.reload();
+  const record = ledger.getRecord('intent_persisted_safely');
+  assert.ok(record);
+  assert.strictEqual(record?.status, 'TRANSACTION_BROADCAST_PENDING');
+  assert.strictEqual(record?.txHash, 'tx_hash_safe');
+
+  if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
+  if (fs.existsSync(ledgerFile)) fs.unlinkSync(ledgerFile);
+});
+
+test('Ledger: reload() preserves backup and recovers from corrupted ledger file', () => {
+  const ledgerFile = path.resolve(tempDir, `ledger_corrupted_${Date.now()}.json`);
+  const ledger = new ExecutionLedger(ledgerFile);
+
+  // Write invalid corrupted syntax directly to main ledger file
+  fs.writeFileSync(ledgerFile, 'MALFORMED_NON_JSON_CORRUPTED_BYTES{{{', 'utf8');
+
+  // Reload should catch corruption, move file to backup, and reset records without crashing
+  ledger.reload();
+  assert.strictEqual(ledger.getAllRecords().length, 0);
+
+  // Verify a .bak backup file was created
+  const files = fs.readdirSync(tempDir);
+  const backupFound = files.some(f => f.startsWith(path.basename(ledgerFile)) && f.includes('.bak.'));
+  assert.strictEqual(backupFound, true);
+
+  // Clean up
+  for (const f of files) {
+    if (f.startsWith(path.basename(ledgerFile))) {
+      try {
+        fs.unlinkSync(path.resolve(tempDir, f));
+      } catch {}
+    }
+  }
+});
+
+test('Ledger: Treats REQUEST_REJECTED and REQUEST_EXPIRED as active duplicates and removes from pending reconciliations', () => {
+  const ledgerFile = path.resolve(tempDir, `ledger_terminal_dedup_${Date.now()}.json`);
+  const ledger = new ExecutionLedger(ledgerFile);
+
+  const intent1: PaymentIntent = {
+    intentId: 'intent_terminal_rejected',
+    destination: 'merchant.vault-parent.testnet',
+    amountNear: '0.1',
+    amountYocto: '100000000000000000000000',
+    reason: 'Rejected dedup',
+    createdAt: Date.now(),
+  };
+
+  const intent2: PaymentIntent = {
+    intentId: 'intent_terminal_expired',
+    destination: 'merchant.vault-parent.testnet',
+    amountNear: '0.1',
+    amountYocto: '100000000000000000000000',
+    reason: 'Expired dedup',
+    createdAt: Date.now(),
+  };
+
+  ledger.recordIntent(intent1, 'REQUEST_REJECTED');
+  ledger.recordIntent(intent2, 'REQUEST_EXPIRED');
+
+  // Both terminal states must prevent duplicate replay of the same intent ID
+  assert.strictEqual(ledger.hasDuplicate('intent_terminal_rejected'), true);
+  assert.strictEqual(ledger.hasDuplicate('intent_terminal_expired'), true);
+
+  // Neither should be present in pending reconciliations
+  const pending = ledger.getPendingReconciliations();
+  assert.strictEqual(pending.some(r => r.intentId === 'intent_terminal_rejected'), false);
+  assert.strictEqual(pending.some(r => r.intentId === 'intent_terminal_expired'), false);
+
+  if (fs.existsSync(ledgerFile)) fs.unlinkSync(ledgerFile);
+});

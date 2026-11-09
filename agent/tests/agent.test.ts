@@ -4,8 +4,15 @@ import path from 'path';
 import fs from 'fs';
 import { VaultAgent } from '../dist/agent.js';
 import { AgentSigner } from '../dist/signer.js';
+import { ProcessLock } from '../dist/ledger.js';
 import type { ContractViewProvider } from '../dist/preflight.js';
-import type { SpendingPolicyView, DailyBucketView, PaymentRequestView, PaymentIntent } from '../dist/types.js';
+import type {
+  SpendingPolicyView,
+  DailyBucketView,
+  PaymentRequestView,
+  ReconciledTombstoneView,
+  PaymentIntent,
+} from '../dist/types.js';
 
 const tempDir = path.resolve(process.cwd(), 'tests', 'temp');
 if (!fs.existsSync(tempDir)) {
@@ -21,6 +28,7 @@ class MockAgentViewProvider implements ContractViewProvider {
   public agentPendingCount: number;
   public globalPendingCount: number;
   public requests: Map<number, PaymentRequestView> = new Map();
+  public tombstones: Map<number, ReconciledTombstoneView> = new Map();
   public txStatuses: Map<string, any> = new Map();
 
   constructor(
@@ -75,6 +83,9 @@ class MockAgentViewProvider implements ContractViewProvider {
   }
   async getRequest(requestId: number): Promise<PaymentRequestView | null> {
     return this.requests.get(requestId) || null;
+  }
+  async getTombstone(requestId: number): Promise<ReconciledTombstoneView | null> {
+    return this.tombstones.get(requestId) || null;
   }
   async getTransactionStatus(txHash: string, _signerAccountId: string): Promise<any> {
     const status = this.txStatuses.get(txHash);
@@ -583,4 +594,447 @@ test('SEC-02 Scenario: Dispatched payment still InFlight remains interim PAYMENT
   const record = agent.getLedger().getRecord('intent_inflight');
   assert.strictEqual(record?.status, 'PAYMENT_DISPATCHED');
   assert.strictEqual(record?.requestId, 100);
+});
+
+test('MED-02 Concurrency: reconcilePending fails closed when process lock is held by another process', async () => {
+  const provider = new MockAgentViewProvider();
+  const ledgerPath = path.resolve(tempDir, `ledger_lock_reconcile_${Date.now()}.json`);
+  const lockfilePath = path.resolve(tempDir, `lock_lock_reconcile_${Date.now()}.lock`);
+
+  // External process holds the lock
+  const externalLock = new ProcessLock(lockfilePath);
+  externalLock.acquire();
+
+  const agent = new VaultAgent(
+    {
+      ledgerPath,
+      lockfilePath,
+      phase1StrictBoundary: true,
+    },
+    provider
+  );
+
+  // reconcilePending should fail closed with lock collision
+  await assert.rejects(
+    async () => {
+      await agent.reconcilePending();
+    },
+    /Concurrency Lock Collision/
+  );
+
+  // Release external lock
+  externalLock.release();
+
+  // Now reconcilePending succeeds
+  const results = await agent.reconcilePending();
+  assert.strictEqual(Array.isArray(results), true);
+});
+
+test('MED-02 Concurrency: requestPayment fails closed when external process holds lock', async () => {
+  const provider = new MockAgentViewProvider();
+  const ledgerPath = path.resolve(tempDir, `ledger_lock_req_${Date.now()}.json`);
+  const lockfilePath = path.resolve(tempDir, `lock_lock_req_${Date.now()}.lock`);
+
+  const externalLock = new ProcessLock(lockfilePath);
+  externalLock.acquire();
+
+  const agent = new VaultAgent(
+    {
+      ledgerPath,
+      lockfilePath,
+      phase1StrictBoundary: true,
+    },
+    provider
+  );
+
+  await assert.rejects(
+    async () => {
+      await agent.requestPayment({
+        destination: 'merchant.vault-parent.testnet',
+        amountNear: '0.1',
+        reason: 'Lock collision check',
+      });
+    },
+    /Concurrency Lock Collision/
+  );
+
+  externalLock.release();
+});
+
+test('MED-01 Terminal Status: Rejected maps to REQUEST_REJECTED in reconciliation', async () => {
+  const provider = new MockAgentViewProvider();
+  const ledgerPath = path.resolve(tempDir, `ledger_rejected_${Date.now()}.json`);
+  const lockfilePath = path.resolve(tempDir, `lock_rejected_${Date.now()}.lock`);
+
+  const agent = new VaultAgent(
+    {
+      ledgerPath,
+      lockfilePath,
+      phase1StrictBoundary: true,
+    },
+    provider
+  );
+
+  agent.getLedger().recordIntent(
+    {
+      intentId: 'intent_rejected_test',
+      destination: 'merchant.vault-parent.testnet',
+      amountNear: '0.5',
+      amountYocto: '500000000000000000000000',
+      reason: 'Rejected payment test',
+      createdAt: Date.now(),
+    },
+    'PENDING_OWNER_APPROVAL'
+  );
+  agent.getLedger().updateRecord('intent_rejected_test', { requestId: 201 });
+
+  provider.requests.set(201, {
+    id: 201,
+    agent_id: 'agent-a.vault-parent.testnet',
+    destination: 'merchant.vault-parent.testnet',
+    amount: '500000000000000000000000',
+    reason: 'Rejected payment test',
+    created_at: 1000,
+    created_bucket: 20000,
+    ttl_nanos: 3600000000000,
+    status: 'Rejected',
+    origin_reason: 'AboveThresholdOnly',
+  });
+
+  const reconciliations = await agent.reconcilePending();
+  assert.strictEqual(reconciliations.length, 1);
+  assert.strictEqual(reconciliations[0].newStatus, 'REQUEST_REJECTED');
+  assert.strictEqual(reconciliations[0].updated, true);
+
+  const record = agent.getLedger().getRecord('intent_rejected_test');
+  assert.strictEqual(record?.status, 'REQUEST_REJECTED');
+});
+
+test('MED-01 Terminal Status: Expired maps to REQUEST_EXPIRED in reconciliation', async () => {
+  const provider = new MockAgentViewProvider();
+  const ledgerPath = path.resolve(tempDir, `ledger_expired_${Date.now()}.json`);
+  const lockfilePath = path.resolve(tempDir, `lock_expired_${Date.now()}.lock`);
+
+  const agent = new VaultAgent(
+    {
+      ledgerPath,
+      lockfilePath,
+      phase1StrictBoundary: true,
+    },
+    provider
+  );
+
+  agent.getLedger().recordIntent(
+    {
+      intentId: 'intent_expired_test',
+      destination: 'merchant.vault-parent.testnet',
+      amountNear: '0.5',
+      amountYocto: '500000000000000000000000',
+      reason: 'Expired payment test',
+      createdAt: Date.now(),
+    },
+    'PENDING_OWNER_APPROVAL'
+  );
+  agent.getLedger().updateRecord('intent_expired_test', { requestId: 202 });
+
+  provider.requests.set(202, {
+    id: 202,
+    agent_id: 'agent-a.vault-parent.testnet',
+    destination: 'merchant.vault-parent.testnet',
+    amount: '500000000000000000000000',
+    reason: 'Expired payment test',
+    created_at: 1000,
+    created_bucket: 20000,
+    ttl_nanos: 3600000000000,
+    status: 'Expired',
+    origin_reason: 'AboveThresholdOnly',
+  });
+
+  const reconciliations = await agent.reconcilePending();
+  assert.strictEqual(reconciliations.length, 1);
+  assert.strictEqual(reconciliations[0].newStatus, 'REQUEST_EXPIRED');
+  assert.strictEqual(reconciliations[0].updated, true);
+
+  const record = agent.getLedger().getRecord('intent_expired_test');
+  assert.strictEqual(record?.status, 'REQUEST_EXPIRED');
+});
+
+test('MED-01 Terminal Status: ReconciledExecuted maps to PAYMENT_EXECUTED in reconciliation', async () => {
+  const provider = new MockAgentViewProvider();
+  const ledgerPath = path.resolve(tempDir, `ledger_reconciled_exec_${Date.now()}.json`);
+  const lockfilePath = path.resolve(tempDir, `lock_reconciled_exec_${Date.now()}.lock`);
+
+  const agent = new VaultAgent(
+    {
+      ledgerPath,
+      lockfilePath,
+      phase1StrictBoundary: true,
+    },
+    provider
+  );
+
+  agent.getLedger().recordIntent(
+    {
+      intentId: 'intent_reconciled_exec',
+      destination: 'merchant.vault-parent.testnet',
+      amountNear: '0.15',
+      amountYocto: '150000000000000000000000',
+      reason: 'ReconciledExecuted test',
+      createdAt: Date.now(),
+    },
+    'PAYMENT_DISPATCHED'
+  );
+  agent.getLedger().updateRecord('intent_reconciled_exec', { requestId: 203 });
+
+  provider.requests.set(203, {
+    id: 203,
+    agent_id: 'agent-a.vault-parent.testnet',
+    destination: 'merchant.vault-parent.testnet',
+    amount: '150000000000000000000000',
+    reason: 'ReconciledExecuted test',
+    created_at: 1000,
+    created_bucket: 20000,
+    ttl_nanos: 3600000000000,
+    status: 'ReconciledExecuted',
+    origin_reason: 'None',
+  });
+
+  const reconciliations = await agent.reconcilePending();
+  assert.strictEqual(reconciliations.length, 1);
+  assert.strictEqual(reconciliations[0].newStatus, 'PAYMENT_EXECUTED');
+  assert.strictEqual(reconciliations[0].updated, true);
+  assert.ok(reconciliations[0].message.includes('via contract reconciliation'));
+
+  const record = agent.getLedger().getRecord('intent_reconciled_exec');
+  assert.strictEqual(record?.status, 'PAYMENT_EXECUTED');
+});
+
+test('MED-01 Terminal Status: ReconciledFailed maps to DOWNSTREAM_TRANSFER_FAILED in reconciliation', async () => {
+  const provider = new MockAgentViewProvider();
+  const ledgerPath = path.resolve(tempDir, `ledger_reconciled_failed_${Date.now()}.json`);
+  const lockfilePath = path.resolve(tempDir, `lock_reconciled_failed_${Date.now()}.lock`);
+
+  const agent = new VaultAgent(
+    {
+      ledgerPath,
+      lockfilePath,
+      phase1StrictBoundary: true,
+    },
+    provider
+  );
+
+  agent.getLedger().recordIntent(
+    {
+      intentId: 'intent_reconciled_failed',
+      destination: 'merchant.vault-parent.testnet',
+      amountNear: '0.15',
+      amountYocto: '150000000000000000000000',
+      reason: 'ReconciledFailed test',
+      createdAt: Date.now(),
+    },
+    'PAYMENT_DISPATCHED'
+  );
+  agent.getLedger().updateRecord('intent_reconciled_failed', { requestId: 204 });
+
+  provider.requests.set(204, {
+    id: 204,
+    agent_id: 'agent-a.vault-parent.testnet',
+    destination: 'merchant.vault-parent.testnet',
+    amount: '150000000000000000000000',
+    reason: 'ReconciledFailed test',
+    created_at: 1000,
+    created_bucket: 20000,
+    ttl_nanos: 3600000000000,
+    status: 'ReconciledFailed',
+    origin_reason: 'None',
+  });
+
+  const reconciliations = await agent.reconcilePending();
+  assert.strictEqual(reconciliations.length, 1);
+  assert.strictEqual(reconciliations[0].newStatus, 'DOWNSTREAM_TRANSFER_FAILED');
+  assert.strictEqual(reconciliations[0].updated, true);
+  assert.ok(reconciliations[0].message.includes('reservation refunded'));
+
+  const record = agent.getLedger().getRecord('intent_reconciled_failed');
+  assert.strictEqual(record?.status, 'DOWNSTREAM_TRANSFER_FAILED');
+});
+
+test('MED-01 Terminal Status: Tombstone Executed maps to PAYMENT_EXECUTED when request view is null', async () => {
+  const provider = new MockAgentViewProvider();
+  const ledgerPath = path.resolve(tempDir, `ledger_tombstone_exec_${Date.now()}.json`);
+  const lockfilePath = path.resolve(tempDir, `lock_tombstone_exec_${Date.now()}.lock`);
+
+  const agent = new VaultAgent(
+    {
+      ledgerPath,
+      lockfilePath,
+      phase1StrictBoundary: true,
+    },
+    provider
+  );
+
+  agent.getLedger().recordIntent(
+    {
+      intentId: 'intent_tombstone_exec',
+      destination: 'merchant.vault-parent.testnet',
+      amountNear: '0.15',
+      amountYocto: '150000000000000000000000',
+      reason: 'Tombstone Executed test',
+      createdAt: Date.now(),
+    },
+    'PAYMENT_DISPATCHED'
+  );
+  agent.getLedger().updateRecord('intent_tombstone_exec', { requestId: 205 });
+
+  // requests.get(205) returns null (pruned from active requests)
+  provider.tombstones.set(205, {
+    request_id: 205,
+    original_bucket: 20000,
+    amount: '150000000000000000000000',
+    attested_resolution: 'Executed',
+    reconciled_at: 1000,
+    evidence_tx_hash: '37oJPsbysoFLtzcUeKh1KZq4YEm14pxCepCzc5cz1Z54',
+  });
+
+  const reconciliations = await agent.reconcilePending();
+  assert.strictEqual(reconciliations.length, 1);
+  assert.strictEqual(reconciliations[0].newStatus, 'PAYMENT_EXECUTED');
+  assert.strictEqual(reconciliations[0].updated, true);
+  assert.ok(reconciliations[0].message.includes('via contract tombstone'));
+
+  const record = agent.getLedger().getRecord('intent_tombstone_exec');
+  assert.strictEqual(record?.status, 'PAYMENT_EXECUTED');
+});
+
+test('MED-01 Terminal Status: Tombstone Failed maps to DOWNSTREAM_TRANSFER_FAILED when request view is null', async () => {
+  const provider = new MockAgentViewProvider();
+  const ledgerPath = path.resolve(tempDir, `ledger_tombstone_fail_${Date.now()}.json`);
+  const lockfilePath = path.resolve(tempDir, `lock_tombstone_fail_${Date.now()}.lock`);
+
+  const agent = new VaultAgent(
+    {
+      ledgerPath,
+      lockfilePath,
+      phase1StrictBoundary: true,
+    },
+    provider
+  );
+
+  agent.getLedger().recordIntent(
+    {
+      intentId: 'intent_tombstone_fail',
+      destination: 'merchant.vault-parent.testnet',
+      amountNear: '0.15',
+      amountYocto: '150000000000000000000000',
+      reason: 'Tombstone Failed test',
+      createdAt: Date.now(),
+    },
+    'PAYMENT_DISPATCHED'
+  );
+  agent.getLedger().updateRecord('intent_tombstone_fail', { requestId: 206 });
+
+  provider.tombstones.set(206, {
+    request_id: 206,
+    original_bucket: 20000,
+    amount: '150000000000000000000000',
+    attested_resolution: 'Failed',
+    reconciled_at: 1000,
+    evidence_tx_hash: 'evidence_failed_tx_hash',
+  });
+
+  const reconciliations = await agent.reconcilePending();
+  assert.strictEqual(reconciliations.length, 1);
+  assert.strictEqual(reconciliations[0].newStatus, 'DOWNSTREAM_TRANSFER_FAILED');
+  assert.strictEqual(reconciliations[0].updated, true);
+
+  const record = agent.getLedger().getRecord('intent_tombstone_fail');
+  assert.strictEqual(record?.status, 'DOWNSTREAM_TRANSFER_FAILED');
+});
+
+test('MED-01 Terminal Status: Missing request view and tombstone fails closed without status mutation', async () => {
+  const provider = new MockAgentViewProvider();
+  const ledgerPath = path.resolve(tempDir, `ledger_missing_req_${Date.now()}.json`);
+  const lockfilePath = path.resolve(tempDir, `lock_missing_req_${Date.now()}.lock`);
+
+  const agent = new VaultAgent(
+    {
+      ledgerPath,
+      lockfilePath,
+      phase1StrictBoundary: true,
+    },
+    provider
+  );
+
+  agent.getLedger().recordIntent(
+    {
+      intentId: 'intent_missing_req',
+      destination: 'merchant.vault-parent.testnet',
+      amountNear: '0.15',
+      amountYocto: '150000000000000000000000',
+      reason: 'Missing request test',
+      createdAt: Date.now(),
+    },
+    'PAYMENT_DISPATCHED'
+  );
+  agent.getLedger().updateRecord('intent_missing_req', { requestId: 999 });
+
+  // Neither request 999 nor tombstone 999 exists
+  const reconciliations = await agent.reconcilePending();
+  assert.strictEqual(reconciliations.length, 1);
+  assert.strictEqual(reconciliations[0].newStatus, 'PAYMENT_DISPATCHED');
+  assert.strictEqual(reconciliations[0].updated, false);
+  assert.ok(reconciliations[0].message.includes('not found in active requests or tombstones'));
+
+  const record = agent.getLedger().getRecord('intent_missing_req');
+  assert.strictEqual(record?.status, 'PAYMENT_DISPATCHED');
+});
+
+test('MED-01 Terminal Status: Unexpected or malformed status fails closed without status mutation', async () => {
+  const provider = new MockAgentViewProvider();
+  const ledgerPath = path.resolve(tempDir, `ledger_malformed_${Date.now()}.json`);
+  const lockfilePath = path.resolve(tempDir, `lock_malformed_${Date.now()}.lock`);
+
+  const agent = new VaultAgent(
+    {
+      ledgerPath,
+      lockfilePath,
+      phase1StrictBoundary: true,
+    },
+    provider
+  );
+
+  agent.getLedger().recordIntent(
+    {
+      intentId: 'intent_malformed',
+      destination: 'merchant.vault-parent.testnet',
+      amountNear: '0.15',
+      amountYocto: '150000000000000000000000',
+      reason: 'Malformed test',
+      createdAt: Date.now(),
+    },
+    'PAYMENT_DISPATCHED'
+  );
+  agent.getLedger().updateRecord('intent_malformed', { requestId: 207 });
+
+  provider.requests.set(207, {
+    id: 207,
+    agent_id: 'agent-a.vault-parent.testnet',
+    destination: 'merchant.vault-parent.testnet',
+    amount: '150000000000000000000000',
+    reason: 'Malformed status',
+    created_at: 1000,
+    created_bucket: 20000,
+    ttl_nanos: 3600000000000,
+    status: 'CorruptedNonExistentVariant' as any,
+    origin_reason: 'None',
+  });
+
+  const reconciliations = await agent.reconcilePending();
+  assert.strictEqual(reconciliations.length, 1);
+  assert.strictEqual(reconciliations[0].newStatus, 'PAYMENT_DISPATCHED');
+  assert.strictEqual(reconciliations[0].updated, false);
+  assert.ok(reconciliations[0].message.includes('Unexpected contract request status'));
+
+  const record = agent.getLedger().getRecord('intent_malformed');
+  assert.strictEqual(record?.status, 'PAYMENT_DISPATCHED');
 });

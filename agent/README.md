@@ -81,10 +81,23 @@ node dist/cli.js request --dest merchant.vault-parent.testnet --amount 0.15 --re
 
 ## 5. Verification Suite
 
-Run all 29 unit, pre-flight, signer, and security tests:
+Run all automated unit, pre-flight, reconciliation, signer, and security tests:
 ```bash
 npm test
 # or
-node --test tests/*.test.ts
+node --test tests/**/*.test.ts
 ```
+
+---
+
+## 6. Process Lock & Operational TTL Constraints
+
+The agent runtime uses an atomic process lock (`.agent.lock`) to prevent concurrent nonce collisions and ledger write races between `request` and `reconcile` operations.
+
+### Lock Safety & 15-Minute TTL:
+- **Lock Acquisition**: Uses POSIX `openSync('wx')` atomic flag for kernel-level mutual exclusion across threads and processes.
+- **Lock Scope**: Enforced across both `agent request` and `agent reconcile` operations, accompanied by atomic in-memory cache reloads (`ledger.reload()`).
+- **Static 15-Minute TTL**: Stale locks older than 15 minutes (`900,000ms`) or belonging to terminated PIDs are safely reclaimed.
+- **Phase 2 Operational Constraint**: The initial Phase 2 live testnet test is **strictly constrained to short-lived CLI operations** (individual payment executions completing within 2–5 seconds).
+- **Daemon Requirement**: Active heartbeat-based TTL renewal must be implemented before unattended background daemon execution or long-running batch-worker processes are authorized.
 

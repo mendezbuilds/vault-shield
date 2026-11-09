@@ -6,6 +6,7 @@ import {
   TransactionOutcomeStatus,
   ExecutionRecord,
   ReconciliationResult,
+  PaymentRequestView,
 } from './types.js';
 import {
   ContractViewProvider,
@@ -192,6 +193,9 @@ export class VaultAgent {
     this.lock.acquire();
 
     try {
+      // Reload ledger to ensure latest disk state before checking duplicates
+      this.ledger.reload();
+
       // 2. Check for duplicate intent
       if (this.ledger.hasDuplicate(intent.intentId)) {
         return {
@@ -291,16 +295,10 @@ export class VaultAgent {
       // Step E: If Dispatched, inspect contract request view to verify downstream transfer execution
       if (parsedOutcome.status === 'PAYMENT_DISPATCHED' && parsedOutcome.requestId !== undefined) {
         try {
-          const reqView = await this.viewProvider.getRequest(parsedOutcome.requestId);
-          if (reqView) {
-            if (reqView.status === 'Executed') {
-              parsedOutcome.status = 'PAYMENT_EXECUTED';
-              parsedOutcome.message = `Payment auto-approved, dispatched, and confirmed executed on-chain (Request ID #${parsedOutcome.requestId}).`;
-            } else if (reqView.status === 'Failed') {
-              parsedOutcome.status = 'DOWNSTREAM_TRANSFER_FAILED';
-              parsedOutcome.message = `Payment dispatched but downstream transfer failed on-chain (Request ID #${parsedOutcome.requestId}). Reservation refunded.`;
-            }
-            // If still InFlight, it remains PAYMENT_DISPATCHED (interim)
+          const resolution = await this.resolveOnChainRequestStatus(parsedOutcome.requestId);
+          if (resolution.updated) {
+            parsedOutcome.status = resolution.status;
+            parsedOutcome.message = resolution.message;
           }
         } catch {
           // If view query times out, keep interim PAYMENT_DISPATCHED state
@@ -333,155 +331,240 @@ export class VaultAgent {
   }
 
   /**
+   * Queries on-chain request view and tombstone to determine the exact terminal state.
+   * Maps all 8 frozen contract RequestStatus variants and tombstone resolutions.
+   * Fails closed on missing, malformed, or unexpected responses.
+   */
+  public async resolveOnChainRequestStatus(requestId: number): Promise<{
+    status: TransactionOutcomeStatus;
+    updated: boolean;
+    message: string;
+  }> {
+    let reqView: PaymentRequestView | null = null;
+    try {
+      reqView = await this.viewProvider.getRequest(requestId);
+    } catch (err: any) {
+      return {
+        status: 'UNKNOWN_UNRESOLVED',
+        updated: false,
+        message: `Contract view query for request #${requestId} failed (${err.message}). State remains unresolved.`,
+      };
+    }
+
+    if (reqView && typeof reqView === 'object') {
+      switch (reqView.status) {
+        case 'Executed':
+          return {
+            status: 'PAYMENT_EXECUTED',
+            updated: true,
+            message: `Downstream transfer confirmed executed on-chain (Request ID #${requestId}).`,
+          };
+        case 'Failed':
+          return {
+            status: 'DOWNSTREAM_TRANSFER_FAILED',
+            updated: true,
+            message: `Downstream transfer confirmed failed on-chain (Request ID #${requestId}). Reservation refunded.`,
+          };
+        case 'InFlight':
+          return {
+            status: 'PAYMENT_DISPATCHED',
+            updated: false,
+            message: `Request is still InFlight on-chain awaiting transfer completion (Request ID #${requestId}).`,
+          };
+        case 'Pending':
+          return {
+            status: 'PENDING_OWNER_APPROVAL',
+            updated: true,
+            message: `Request is in pending queue awaiting owner approval (Request ID #${requestId}).`,
+          };
+        case 'Rejected':
+          return {
+            status: 'REQUEST_REJECTED',
+            updated: true,
+            message: `Payment request was explicitly rejected by the vault owner on-chain (Request ID #${requestId}).`,
+          };
+        case 'Expired':
+          return {
+            status: 'REQUEST_EXPIRED',
+            updated: true,
+            message: `Payment request expired on-chain before receiving owner approval (Request ID #${requestId}).`,
+          };
+        case 'ReconciledExecuted':
+          return {
+            status: 'PAYMENT_EXECUTED',
+            updated: true,
+            message: `Payment attested and executed via contract reconciliation (Request ID #${requestId}).`,
+          };
+        case 'ReconciledFailed':
+          return {
+            status: 'DOWNSTREAM_TRANSFER_FAILED',
+            updated: true,
+            message: `Payment attested as failed via contract reconciliation; reservation refunded (Request ID #${requestId}).`,
+          };
+        default:
+          return {
+            status: 'UNKNOWN_UNRESOLVED',
+            updated: false,
+            message: `Unexpected contract request status "${(reqView as any).status}" for request #${requestId}. State remains unresolved.`,
+          };
+      }
+    }
+
+    // If request view is null, check tombstone for attested resolution
+    if (this.viewProvider.getTombstone) {
+      try {
+        const tombstone = await this.viewProvider.getTombstone(requestId);
+        if (tombstone && typeof tombstone === 'object') {
+          if (tombstone.attested_resolution === 'Executed') {
+            return {
+              status: 'PAYMENT_EXECUTED',
+              updated: true,
+              message: `Payment attested and executed via contract tombstone (Request ID #${requestId}, evidence: ${tombstone.evidence_tx_hash}).`,
+            };
+          } else if (tombstone.attested_resolution === 'Failed') {
+            return {
+              status: 'DOWNSTREAM_TRANSFER_FAILED',
+              updated: true,
+              message: `Payment attested as failed via contract tombstone; reservation refunded (Request ID #${requestId}, evidence: ${tombstone.evidence_tx_hash}).`,
+            };
+          }
+        }
+      } catch {
+        // Fall through to unresolvable
+      }
+    }
+
+    // Fail closed: missing or unresolvable
+    return {
+      status: 'UNKNOWN_UNRESOLVED',
+      updated: false,
+      message: `Payment request #${requestId} was not found in active requests or tombstones. State remains unresolved.`,
+    };
+  }
+
+  /**
    * Reconciles ambiguous or in-flight transaction records against NEAR RPC.
+   * Acquired under single-instance process lock to prevent concurrent races.
    * NEVER blindly rebuilds or rebroadcasts transactions.
    */
   public async reconcilePending(targetIntentId?: string): Promise<ReconciliationResult[]> {
-    const results: ReconciliationResult[] = [];
-    const records = targetIntentId
-      ? [this.ledger.getRecord(targetIntentId)].filter(Boolean) as ExecutionRecord[]
-      : this.ledger.getPendingReconciliations();
+    this.lock.acquire();
+    try {
+      this.ledger.reload();
+      const results: ReconciliationResult[] = [];
+      const records = targetIntentId
+        ? [this.ledger.getRecord(targetIntentId)].filter(Boolean) as ExecutionRecord[]
+        : this.ledger.getPendingReconciliations();
 
-    for (const record of records) {
-      const prevStatus = record.status;
+      for (const record of records) {
+        const prevStatus = record.status;
 
-      // 1. If requestId is known (e.g. was PAYMENT_DISPATCHED interim state)
-      if (record.requestId !== undefined) {
-        try {
-          const reqView = await this.viewProvider.getRequest(record.requestId);
-          if (reqView) {
-            if (reqView.status === 'Executed') {
-              this.ledger.updateRecord(record.intentId, { status: 'PAYMENT_EXECUTED' });
+        // 1. If requestId is known (e.g. was PAYMENT_DISPATCHED or PENDING_OWNER_APPROVAL state)
+        if (record.requestId !== undefined) {
+          const resolution = await this.resolveOnChainRequestStatus(record.requestId);
+          const hasStateChanged = resolution.updated && resolution.status !== prevStatus;
+
+          if (hasStateChanged) {
+            this.ledger.updateRecord(record.intentId, { status: resolution.status });
+            results.push({
+              intentId: record.intentId,
+              txHash: record.txHash,
+              previousStatus: prevStatus,
+              newStatus: resolution.status,
+              requestId: record.requestId,
+              message: resolution.message,
+              updated: true,
+            });
+          } else {
+            results.push({
+              intentId: record.intentId,
+              txHash: record.txHash,
+              previousStatus: prevStatus,
+              newStatus: resolution.status === 'UNKNOWN_UNRESOLVED' ? prevStatus : resolution.status,
+              requestId: record.requestId,
+              message: resolution.message,
+              updated: false,
+            });
+          }
+          continue;
+        }
+
+        // 2. If txHash is known, query on-chain transaction outcome via RPC
+        if (record.txHash && this.viewProvider.getTransactionStatus) {
+          try {
+            const txOutcome = await this.viewProvider.getTransactionStatus(record.txHash, this.config.agentAccountId);
+            if (!txOutcome) {
               results.push({
                 intentId: record.intentId,
                 txHash: record.txHash,
                 previousStatus: prevStatus,
-                newStatus: 'PAYMENT_EXECUTED',
-                requestId: record.requestId,
-                message: `Downstream transfer confirmed executed on-chain (Request ID #${record.requestId}).`,
-                updated: true,
-              });
-              continue;
-            } else if (reqView.status === 'Failed') {
-              this.ledger.updateRecord(record.intentId, { status: 'DOWNSTREAM_TRANSFER_FAILED' });
-              results.push({
-                intentId: record.intentId,
-                txHash: record.txHash,
-                previousStatus: prevStatus,
-                newStatus: 'DOWNSTREAM_TRANSFER_FAILED',
-                requestId: record.requestId,
-                message: `Downstream transfer confirmed failed on-chain (Request ID #${record.requestId}). Reservation refunded.`,
-                updated: true,
-              });
-              continue;
-            } else if (reqView.status === 'Pending') {
-              this.ledger.updateRecord(record.intentId, { status: 'PENDING_OWNER_APPROVAL' });
-              results.push({
-                intentId: record.intentId,
-                txHash: record.txHash,
-                previousStatus: prevStatus,
-                newStatus: 'PENDING_OWNER_APPROVAL',
-                requestId: record.requestId,
-                message: `Request is in pending queue awaiting owner approval (Request ID #${record.requestId}).`,
-                updated: true,
-              });
-              continue;
-            } else if (reqView.status === 'InFlight') {
-              results.push({
-                intentId: record.intentId,
-                txHash: record.txHash,
-                previousStatus: prevStatus,
-                newStatus: 'PAYMENT_DISPATCHED',
-                requestId: record.requestId,
-                message: `Request is still InFlight on-chain awaiting transfer completion.`,
+                newStatus: prevStatus,
+                message: `Transaction hash (${record.txHash}) not yet indexed by RPC endpoint. Do not rebroadcast; re-check in a few blocks.`,
                 updated: false,
               });
               continue;
             }
-          }
-        } catch (err: any) {
-          results.push({
-            intentId: record.intentId,
-            txHash: record.txHash,
-            previousStatus: prevStatus,
-            newStatus: prevStatus,
-            requestId: record.requestId,
-            message: `Contract view query failed (${err.message}). State remains unresolved.`,
-            updated: false,
-          });
-          continue;
-        }
-      }
 
-      // 2. If txHash is known, query on-chain transaction outcome via RPC
-      if (record.txHash && this.viewProvider.getTransactionStatus) {
-        try {
-          const txOutcome = await this.viewProvider.getTransactionStatus(record.txHash, this.config.agentAccountId);
-          if (!txOutcome) {
+            const parsed = this.parseExecutionOutcome(txOutcome);
+            let finalStatus = parsed.status;
+            let reqId = parsed.requestId;
+            let finalMessage = parsed.message;
+
+            // If dispatched, check downstream request view
+            if (finalStatus === 'PAYMENT_DISPATCHED' && reqId !== undefined) {
+              const resolution = await this.resolveOnChainRequestStatus(reqId);
+              if (resolution.updated) {
+                finalStatus = resolution.status;
+                finalMessage = resolution.message;
+              }
+            }
+
+            const hasStateChanged = finalStatus !== prevStatus;
+            this.ledger.updateRecord(record.intentId, {
+              status: finalStatus,
+              requestId: reqId,
+              originReason: parsed.originReason,
+              policyDenialReason: parsed.policyDenialReason,
+              errorMessage: parsed.errorMessage,
+            });
+
+            results.push({
+              intentId: record.intentId,
+              txHash: record.txHash,
+              previousStatus: prevStatus,
+              newStatus: finalStatus,
+              requestId: reqId,
+              message: `Transaction reconciled successfully: ${finalMessage}`,
+              updated: hasStateChanged,
+            });
+            continue;
+          } catch (err: any) {
             results.push({
               intentId: record.intentId,
               txHash: record.txHash,
               previousStatus: prevStatus,
               newStatus: prevStatus,
-              message: `Transaction hash (${record.txHash}) not yet indexed by RPC endpoint. Do not rebroadcast; re-check in a few blocks.`,
+              message: `Error querying transaction status: ${err.message}. State remains unresolved.`,
               updated: false,
             });
             continue;
           }
-
-          const parsed = this.parseExecutionOutcome(txOutcome);
-          let finalStatus = parsed.status;
-          let reqId = parsed.requestId;
-
-          // If dispatched, check downstream request view
-          if (finalStatus === 'PAYMENT_DISPATCHED' && reqId !== undefined) {
-            const reqView = await this.viewProvider.getRequest(reqId);
-            if (reqView?.status === 'Executed') finalStatus = 'PAYMENT_EXECUTED';
-            else if (reqView?.status === 'Failed') finalStatus = 'DOWNSTREAM_TRANSFER_FAILED';
-          }
-
-          this.ledger.updateRecord(record.intentId, {
-            status: finalStatus,
-            requestId: reqId,
-            originReason: parsed.originReason,
-            policyDenialReason: parsed.policyDenialReason,
-            errorMessage: parsed.errorMessage,
-          });
-
-          results.push({
-            intentId: record.intentId,
-            txHash: record.txHash,
-            previousStatus: prevStatus,
-            newStatus: finalStatus,
-            requestId: reqId,
-            message: `Transaction reconciled successfully: ${parsed.message}`,
-            updated: true,
-          });
-          continue;
-        } catch (err: any) {
-          results.push({
-            intentId: record.intentId,
-            txHash: record.txHash,
-            previousStatus: prevStatus,
-            newStatus: prevStatus,
-            message: `Error querying transaction status: ${err.message}. State remains unresolved.`,
-            updated: false,
-          });
-          continue;
         }
+
+        // 3. No txHash was recorded before crash
+        results.push({
+          intentId: record.intentId,
+          previousStatus: prevStatus,
+          newStatus: prevStatus,
+          message: `Cannot reconcile: transaction hash was not recorded before termination. Never rebroadcasting automatically.`,
+          updated: false,
+        });
       }
 
-      // 3. No txHash was recorded before crash
-      results.push({
-        intentId: record.intentId,
-        previousStatus: prevStatus,
-        newStatus: prevStatus,
-        message: `Cannot reconcile: transaction hash was not recorded before termination. Never rebroadcasting automatically.`,
-        updated: false,
-      });
+      return results;
+    } finally {
+      this.lock.release();
     }
-
-    return results;
   }
 
   /**

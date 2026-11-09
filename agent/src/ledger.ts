@@ -22,6 +22,7 @@ export interface LockMetadata {
 export class ProcessLock {
   private isLocked = false;
   private fd: number | null = null;
+  private exitHandler: (() => void) | null = null;
 
   constructor(
     private lockfilePath: string,
@@ -96,13 +97,19 @@ export class ProcessLock {
       this.isLocked = true;
 
       // Register process exit cleanup handlers
-      process.on('exit', () => this.release());
+      this.exitHandler = () => this.release();
+      process.once('exit', this.exitHandler);
     } catch (err: any) {
       throw new Error(`Failed to acquire agent process lock (${this.lockfilePath}): ${err.message}`);
     }
   }
 
   public release(): void {
+    if (this.exitHandler) {
+      process.removeListener('exit', this.exitHandler);
+      this.exitHandler = null;
+    }
+
     if (this.isLocked && fs.existsSync(this.lockfilePath)) {
       try {
         // Verify we own the lock before unlinking
@@ -176,9 +183,27 @@ export class ExecutionLedger {
     }
 
     const data = Array.from(this.records.values());
-    const tempPath = `${this.ledgerPath}.tmp`;
+    const tempPath = `${this.ledgerPath}.${Date.now()}_${Math.random().toString(36).slice(2, 8)}.tmp`;
     fs.writeFileSync(tempPath, JSON.stringify(data, null, 2), 'utf8');
-    fs.renameSync(tempPath, this.ledgerPath);
+
+    try {
+      fs.renameSync(tempPath, this.ledgerPath);
+    } catch {
+      // Windows filesystem atomic rename fallback
+      try {
+        if (fs.existsSync(this.ledgerPath)) {
+          fs.unlinkSync(this.ledgerPath);
+        }
+        fs.renameSync(tempPath, this.ledgerPath);
+      } catch {
+        fs.copyFileSync(tempPath, this.ledgerPath);
+        try {
+          fs.unlinkSync(tempPath);
+        } catch {
+          // ignore
+        }
+      }
+    }
   }
 
   public getRecord(intentId: string): ExecutionRecord | null {
@@ -187,6 +212,14 @@ export class ExecutionLedger {
 
   public getAllRecords(): ExecutionRecord[] {
     return Array.from(this.records.values());
+  }
+
+  /**
+   * Clears in-memory cache and reloads records directly from disk.
+   */
+  public reload(): void {
+    this.records.clear();
+    this.load();
   }
 
   /**
@@ -204,6 +237,8 @@ export class ExecutionLedger {
       'PAYMENT_EXECUTED',
       'DRY_RUN_SUCCESS',
       'UNKNOWN_UNRESOLVED',
+      'REQUEST_REJECTED',
+      'REQUEST_EXPIRED',
     ];
 
     return activeOrConfirmedStates.includes(record.status);
@@ -260,6 +295,7 @@ export class ExecutionLedger {
       'TRANSACTION_BROADCAST_PENDING',
       'UNKNOWN_UNRESOLVED',
       'PAYMENT_DISPATCHED', // In-flight promises awaiting downstream callback confirmation
+      'PENDING_OWNER_APPROVAL', // Requests awaiting owner approval, rejection, or expiry
     ];
     return Array.from(this.records.values()).filter(r => pendingStates.includes(r.status));
   }
