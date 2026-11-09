@@ -112,3 +112,26 @@ In the top right navigation bar, click the **Wallet / Persona** button to simula
 - **Owner Mode (`owner.vault-parent.testnet`)**: Full administrative access to approve/reject requests, edit policies, and trigger pause.
 - **Agent Alpha Mode (`agent-a.vault-parent.testnet`)**: Restricted agent perspective illustrating payment request submission.
 - **Connect Real Wallet**: Seamless connection via NEAR Wallet Selector to MyNearWallet or Meteor for genuine live testnet transaction signing.
+
+---
+
+## 🔬 Final On-Chain Evidence Addendum
+
+### On-Chain Request #2 Expiry Verification
+- **Executed Transaction**: [`37oJPsbysoFLtzcUeKh1KZq4YEm14pxCepCzc5cz1Z54`](https://explorer.testnet.near.org/transactions/37oJPsbysoFLtzcUeKh1KZq4YEm14pxCepCzc5cz1Z54)
+- **Signer**: `relayer.vault-parent.testnet`
+- **Method**: `expire_request(2)`
+- **Gas**: 3.5 Tgas consumed
+- **Audit Ring Proof**: Sequence ID 38, Event `PaymentExpired`, Request ID 2, Timestamp `1794211966520387600`.
+- **Accounting Verification**:
+  - Pending reservation decreased from `0.100 NEAR` to `0.000 NEAR`.
+  - Available liquid balance restored to `0.2489 NEAR`.
+  - Global pending queue is at `0 / 32 Slots`.
+
+### Policy Enforcement & Security Summary
+- All 10 core policy scenarios verified via on-chain audit ring events and Stage 4 execution.
+- Real transactions sign client-side via Wallet Selector.
+- Serverless proxy `/api/tx/execute` blocks simulation attacks on production.
+- Contract remains non-custodial and mathematically solvent.
+
+

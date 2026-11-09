@@ -177,5 +177,85 @@ Total Console Errors across Live QA: 0
 
 ## 6. Known State & Operational Recommendations
 
-1. **Request #2 Expiration**: Request #2 (0.100 NEAR) has expired. Calling `expire_request(2)` on testnet will return its 0.100 NEAR reservation back to `available_liquid_balance`, bringing liquid funds to ~0.2488 NEAR.
+1. **Request #2 Expiration**: Successfully executed on-chain in Stage 4! The 0.100 NEAR reservation has been released, returning liquid funds to ~0.2489 NEAR.
 2. **Hackathon Judging**: Live judge walkthrough instructions and persona flows are documented in `DEMO_WALKTHROUGH.md`.
+
+---
+
+## 7. Final On-Chain Evidence Addendum
+
+### 7.1 Request #2 On-Chain Expiry Execution Evidence
+
+The expiry of pending Request #2 was executed directly against `contract.vault-parent.testnet` using an approved testnet account:
+
+- **Test ID**: `STAGE4-EXPIRY-REQ2`
+- **Caller / Signer**: `relayer.vault-parent.testnet` (permissionless invocation)
+- **Contract Account**: `contract.vault-parent.testnet`
+- **Method Called**: `expire_request`
+- **Arguments**: `{"request_id": 2}`
+- **Prepaid Gas**: `100.0 Tgas` (actual gas consumed: `3.5 Tgas`)
+- **Attached Deposit**: `0 NEAR`
+- **Transaction Hash**: [`37oJPsbysoFLtzcUeKh1KZq4YEm14pxCepCzc5cz1Z54`](https://explorer.testnet.near.org/transactions/37oJPsbysoFLtzcUeKh1KZq4YEm14pxCepCzc5cz1Z54)
+- **NEAR Explorer Link**: [https://explorer.testnet.near.org/transactions/37oJPsbysoFLtzcUeKh1KZq4YEm14pxCepCzc5cz1Z54](https://explorer.testnet.near.org/transactions/37oJPsbysoFLtzcUeKh1KZq4YEm14pxCepCzc5cz1Z54)
+- **On-Chain Event Log**:
+  ```json
+  EVENT_JSON:{"standard":"ai-agent-vault","version":"1.0.0","event":"payment_expired","data":[{"request_id":2}]}
+  ```
+- **Audit Ring Record**: Sequence ID `38`, Event Type `PaymentExpired`, Request ID `2`, Timestamp `1794211966520387600`, Amount `100000000000000000000000` yocto.
+
+### 7.2 Before / After Solvency & Queue Accounting
+
+| Accounting Metric | Pre-Expiry State | Post-Expiry State | Net Delta |
+| :--- | :--- | :--- | :--- |
+| **Total Account Balance** | `5.196339 NEAR` | `5.196489 NEAR` | $+0.000150\text{ NEAR}$ |
+| **Storage Reserve Requirement** | `4.947520 NEAR` | `4.947520 NEAR` | $0.000000\text{ NEAR}$ |
+| **Protected Balance** | `0.248820 NEAR` | `0.248969 NEAR` | $+0.000149\text{ NEAR}$ |
+| **Pending Reserved (Escrow)** | `0.100000 NEAR` | `0.000000 NEAR` | $\mathbf{-0.100000\text{ NEAR (RELEASED)}}$ |
+| **Inflight Reserved** | `0.000000 NEAR` | `0.000000 NEAR` | $0.000000\text{ NEAR}$ |
+| **Available Liquid Balance** | `0.148820 NEAR` | `0.248969 NEAR` | $\mathbf{+0.100149\text{ NEAR}}$ |
+| **Global Pending Count** | `1` | `0` | $-1$ |
+| **Agent-A Pending Count** | `1` | `0` | $-1$ |
+| **Request #2 Status** | `Pending` | `Expired` | State finalized |
+
+**Frontend Impact Confirmed**: Headless browser verification against `https://vault-shield-two.vercel.app/#app` confirmed live rendering updated to `0 Pending Requests`, `0 / 32 Slots`, and liquid balance updated to `~0.25 NEAR`.
+
+---
+
+### 7.3 Payment & Policy Enforcement Test Matrix
+
+Evidence distinguishing newly executed Stage 4 tests, previously verified Phase 2 on-chain tests, and read-only / unit verifications:
+
+| Test ID | Test Category | Signer Account | Contract Method & Input | Expected Outcome | Actual Outcome & Proof | Verification Status |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **TEST-01** | Valid payment within policy | `agent-a.vault-parent.testnet` | `request_payment({"amount": "0.15 NEAR", "destination": "merchant..."})` | Auto-dispatched and executed | Dispatched and executed to merchant. Recorded in Audit Ring Seq 3 & 4. | **Phase 2 Verified** |
+| **TEST-02** | Approval-required payment | `agent-a.vault-parent.testnet` | `request_payment({"amount": "0.50 NEAR", "destination": "merchant..."})` | Enters pending queue | Held in pending queue (exceeds 0.20 threshold). Recorded in Audit Ring Seq 7. | **Phase 2 Verified** |
+| **TEST-03** | Owner approval | `owner.vault-parent.testnet` | `approve_request({"request_id": 3})` | Payment approved & dispatched | Approved by owner and executed to merchant. Recorded in Audit Ring Seq 11 & 12. | **Phase 2 Verified** |
+| **TEST-04** | Per-transaction cap | `agent-a.vault-parent.testnet` | `request_payment({"amount": "1.50 NEAR", "destination": "merchant..."})` | Rejected on-chain | Denied (`MaxPerTransactionExceeded`, code 2). Recorded in Audit Ring Seq 5. | **Phase 2 Verified** |
+| **TEST-05** | Daily cap | `agent-a.vault-parent.testnet` | `request_payment({"amount": "0.50 NEAR", "destination": "merchant..."})` | Denied when daily budget exceeded | Denied (`DailyCapExceeded`, code 3). Recorded in Audit Ring Seq 37. | **Phase 2 Verified** |
+| **TEST-06** | Unlisted destination | `agent-a.vault-parent.testnet` | `request_payment({"amount": "0.10 NEAR", "destination": "unlisted..."})` | Held for owner approval | Held in pending (code 1, `NewDestinationOnly`) despite amount < threshold. Audit Seq 6. | **Phase 2 Verified** |
+| **TEST-07** | Revoked agent | `agent-rev.vault-parent.testnet` | `request_payment(...)` after `revoke_agent` | Calls denied / invalidated | Owner revoked agent in Audit Seq 17; pending req 6 invalidated in Seq 18; `is_agent_authorized` returns false. | **Phase 2 Verified** |
+| **TEST-08** | Paused vault | `owner.vault-parent.testnet` / `agent-a` | `pause()` followed by `request_payment(...)` | All payments blocked | Vault paused in Audit Seq 20; payment denied with `VaultIsPaused` code 0 in Seq 21. | **Phase 2 Verified** |
+| **TEST-09** | Unauthorized owner action | Non-owner caller (`relayer` / `agent-a`) | `pause()`, `set_policy()`, `withdraw()` | Revert with panic | Contract source `assert_owner` panics with `"Unauthorized caller: predecessor is not owner"`. Verified in Rust unit suite `test_unauthorized_pause_rejected`. | **Safe Read-Only / Unit Verified (Live Tx Not Run)** |
+| **TEST-10** | Expired request | `relayer.vault-parent.testnet` | `expire_request({"request_id": 2})` | Reservation released, status Expired | Request #2 transitioned to Expired. 0.100 NEAR reservation released to liquid pool. Audit Seq 38. | **Stage 4 Newly Executed**<br/>Tx: [`37oJPsbysoFLtz...`](https://explorer.testnet.near.org/transactions/37oJPsbysoFLtzcUeKh1KZq4YEm14pxCepCzc5cz1Z54) |
+
+---
+
+### 7.4 Genuine Wallet Signing Verification
+
+- **Architecture Audit**: `frontend/src/services/nearWallet.ts` uses `@near-wallet-selector/core` and `@near-wallet-selector/my-near-wallet`.
+- **Client-Side Isolation**: Transactions initiated by genuine wallets invoke `wallet.signAndSendTransaction` directly inside the browser DOM. No private keys, seed phrases, or signatures touch any server route.
+- **Production Endpoint Protection**: `/api/tx/execute` rejects evaluation personas on production deployments with HTTP 403, guaranteeing that simulated personas cannot execute transactions.
+- **Live Interactive Web3 Wallet Execution**:
+  - Wallet Selector initializes cleanly on `https://vault-shield-two.vercel.app`.
+  - MyNearWallet integration redirects to `https://testnet.mynearwallet.com` for official key delegation.
+  - Interactive browser signing via third-party web wallet was **NOT RUN** autonomously because external OAuth redirection to `testnet.mynearwallet.com` requires interactive human approval and CAPTCHA / credential entry. Transaction signing was independently verified via the official NEAR Testnet CLI and on-chain RPC execution (`STAGE4-EXPIRY-REQ2`).
+
+---
+
+### 7.5 Remaining Limitations & Safe Operating Bounds
+
+1. **Testnet Scope**: All contracts, transactions, and agents operate exclusively on NEAR Public Testnet. Mainnet deployment is not enabled.
+2. **Evaluation Personas**: Evaluation personas operate in read-only inspection mode on the live public deployment. Real transaction mutations require genuine wallet authentication via MyNearWallet or authorized NEAR CLI signers.
+3. **Queue Health**: With Request #2 expired and released, the pending queue is at `0 / 32 Slots`, providing full capacity for autonomous AI agent dispatch.
+
+

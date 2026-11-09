@@ -150,3 +150,4 @@ The contract strictly segments authority between three tiers of callers:
      - Guarantees that the reconciled request ID can never be re-executed or re-approved.
      - Releases pending reserved balance back to liquid funds.
      - Records an immutable cryptographic record of the owner's manual intervention.
+
