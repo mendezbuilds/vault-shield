@@ -57,7 +57,15 @@ cp .env.agent.example .env.agent
 
 ## 4. CLI Commands
 
-### 4.1 Display On-Chain Status
+### 4.1 Execute Natural-Language AI Agent Task (Task 1.1)
+Accepts a natural-language task prompt, generates structured tool calls via the configured provider (`mock` or `gemini`), validates arguments with defense-in-depth, and routes execution through the Vault Shield policy and restricted signer pipeline:
+```bash
+npm run agent task -- --prompt "Pay 0.1 NEAR to merchant.vault-parent.testnet for API compute credits"
+# or directly:
+node dist/cli.js task --prompt "Pay 0.1 NEAR to merchant.vault-parent.testnet for API compute credits"
+```
+
+### 4.2 Display On-Chain Status
 Queries live contract policy, solvency, queue limits, and access key permissions:
 ```bash
 npm run agent status
@@ -65,13 +73,13 @@ npm run agent status
 node dist/cli.js status
 ```
 
-### 4.2 Run Advisory Pre-Flight Check
+### 4.3 Run Advisory Pre-Flight Check
 Simulates all 10 on-chain policy invariants for a prospective payment:
 ```bash
 node dist/cli.js preflight --dest merchant.vault-parent.testnet --amount 0.15 --reason "Batch LLM Embeddings"
 ```
 
-### 4.3 Formulate & Preview Payment Request (Dry-Run)
+### 4.4 Formulate & Preview Payment Request (Dry-Run)
 Formulates the exact transaction payload, validates zero deposit, and records dry-run outcome in the local execution ledger without broadcasting:
 ```bash
 node dist/cli.js request --dest merchant.vault-parent.testnet --amount 0.15 --reason "LLM Inference Payment" --dry-run

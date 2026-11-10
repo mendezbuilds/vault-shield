@@ -15,6 +15,12 @@ import {
 } from './preflight.js';
 import { AgentSigner, SignedPayloadPreview } from './signer.js';
 import { ExecutionLedger, ProcessLock, generateIntentId } from './ledger.js';
+import {
+  AITaskRunner,
+  AITaskOptions,
+  AITaskResult,
+  LLMProvider,
+} from './llm.js';
 
 export interface AgentStatusReport {
   agentAccountId: string;
@@ -153,6 +159,22 @@ export class VaultAgent {
    */
   public async preflight(intent: PaymentIntent): Promise<PreflightResult> {
     return executePreflight(intent, this.config, this.viewProvider);
+  }
+
+  /**
+   * Executes a natural-language task using the AI intelligence layer.
+   * Interprets task via configured LLM provider, validates proposed payment parameters,
+   * and routes through the standard requestPayment pipeline.
+   *
+   * SECURITY GUARANTEE:
+   * The AI layer NEVER accesses private keys or signing logic directly.
+   */
+  public async runTask(
+    taskPrompt: string,
+    options: AITaskOptions = {}
+  ): Promise<AITaskResult> {
+    const runner = new AITaskRunner(this, options.provider);
+    return await runner.runTask(taskPrompt, options);
   }
 
   /**

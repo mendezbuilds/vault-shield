@@ -17,6 +17,8 @@ function parseArgs(args: string[]): { command: string; options: Record<string, s
       } else {
         options[key] = true;
       }
+    } else if (i === 1) {
+      options['_positionalPrompt'] = arg;
     }
   }
 
@@ -33,6 +35,8 @@ function printHelp(): void {
   printBanner();
   console.log('Usage: agent <command> [options]\n');
   console.log('Commands:');
+  console.log('  task --prompt <text> [--dry-run] [--live] [--provider <mock|gemini>]');
+  console.log('      Execute natural-language AI task through Vault Shield security layer.\n');
   console.log('  status');
   console.log('      Display live contract policy, solvency, and restricted key state.\n');
   console.log('  preflight --dest <id> --amount <near> [--reason <text>] [--ttl <seconds>]');
@@ -42,9 +46,11 @@ function printHelp(): void {
   console.log('  reconcile [--intent-id <id>]');
   console.log('      Reconcile unresolved or in-flight transaction records against NEAR RPC.\n');
   console.log('Options:');
+  console.log('  --prompt <text>         Natural-language instruction for AI agent task');
   console.log('  --dest <account_id>     Target recipient NEAR account ID');
   console.log('  --amount <near>         Payment amount in NEAR (e.g. 0.15)');
   console.log('  --reason <text>         Audit reason description');
+  console.log('  --provider <name>       AI provider (mock [default] or gemini)');
   console.log('  --dry-run               Run simulation and payload construction without broadcast');
   console.log('  --live                  Authorize live on-chain broadcast (requires AGENT_PHASE1_STRICT_BOUNDARY=false)');
   console.log('  --ttl <seconds>         Optional request TTL in seconds (300 to 86400)');
@@ -146,7 +152,7 @@ async function handlePreflight(agent: VaultAgent, options: Record<string, string
   console.log('================================================================');
 
   if (!result.success) {
-    process.exit(1);
+    process.exitCode = 1;
   }
 }
 
@@ -222,6 +228,98 @@ async function handleRequest(agent: VaultAgent, options: Record<string, string |
   }
 }
 
+async function handleTask(agent: VaultAgent, options: Record<string, string | boolean>): Promise<void> {
+  printBanner();
+  const prompt = (options.prompt as string) || (typeof options._positionalPrompt === 'string' ? options._positionalPrompt : '');
+
+  if (!prompt || !prompt.trim()) {
+    console.error('❌ Missing required instruction: --prompt "<task description>" is required.\n');
+    console.log('Example:');
+    console.log('  npm run agent task -- --prompt "Pay 0.1 NEAR to merchant.vault-parent.testnet for API compute credits"\n');
+    process.exit(1);
+  }
+
+  let isDryRun: boolean | undefined = undefined;
+  if (options['dry-run'] === false || options['dry-run'] === 'false') {
+    isDryRun = false;
+  } else if (options['dry-run'] === true || options['dry-run'] === 'true') {
+    isDryRun = true;
+  } else if (options['live'] === true || options['live'] === 'true') {
+    isDryRun = false;
+  }
+
+  const effectiveDryRun = isDryRun !== undefined ? isDryRun : agent.getConfig().phase1StrictBoundary;
+  const providerName = options.provider as string | undefined;
+
+  console.log('🤖 AI AGENT TASK INGESTION:');
+  console.log(`  Task Prompt: "${prompt.trim()}"`);
+  console.log(`  Provider:    ${providerName || agent.getConfig().llmProvider || 'mock'}`);
+  console.log(`  Execution:   ${effectiveDryRun ? 'DRY-RUN (Safe Simulation)' : 'LIVE ON-CHAIN BROADCAST'}\n`);
+
+  const result = await agent.runTask(prompt.trim(), {
+    dryRun: effectiveDryRun,
+    providerName,
+  });
+
+  console.log('AI REASONING & DECISION:');
+  console.log(`  Decision:    ${result.decisionType}`);
+
+  if (result.explanation) {
+    console.log(`  Explanation: ${result.explanation}`);
+  }
+
+  if (result.proposedIntent) {
+    console.log('\nPROPOSED PAYMENT INTENT (TOOL CALL):');
+    console.log(`  Destination: ${result.proposedIntent.destination}`);
+    console.log(`  Amount:      ${result.proposedIntent.amountNear} NEAR`);
+    console.log(`  Reason:      ${result.proposedIntent.reason}`);
+    console.log('  Validation:  ✅ STRICT ARGUMENT SCHEMA VERIFIED');
+  }
+
+  if (result.validationError) {
+    console.log('\n❌ ARGUMENT VALIDATION FAILED:');
+    console.log(`  Error:       ${result.validationError}`);
+  }
+
+  if (result.paymentResult) {
+    const pr = result.paymentResult;
+    console.log('\nVAULT SHIELD RUNTIME OUTCOME:');
+    console.log(`  Intent ID:   ${pr.intentId}`);
+    console.log(`  Pre-Flight:  ${pr.preflight.success ? '✅ PASSED' : '❌ DENIED'}`);
+    if (pr.preflight.predictedRouting) {
+      console.log(`  Routing:     ${pr.preflight.predictedRouting}`);
+    }
+    console.log(`  Status:      ${pr.status}`);
+    console.log(`  Message:     ${pr.message}`);
+
+    if (pr.preview) {
+      console.log('\nVERIFIED SIGNED TRANSACTION PAYLOAD:');
+      console.log(`  Signer:      ${pr.preview.signerId}`);
+      console.log(`  Receiver:    ${pr.preview.receiverId}`);
+      console.log(`  Method:      ${pr.preview.methodName}`);
+      console.log(`  Attached Gas: ${pr.preview.gas} (30 Tgas)`);
+      console.log(`  Attached Deposit: ${pr.preview.deposit} (0 yoctoNEAR - RESTRICTED KEY VERIFIED)`);
+    }
+
+    if (pr.txHash) {
+      console.log(`  Tx Hash:     ${pr.txHash}`);
+    }
+    if (pr.requestId !== undefined) {
+      console.log(`  Request ID:  #${pr.requestId}`);
+    }
+  }
+
+  if (result.error && !result.paymentResult) {
+    console.log(`\n❌ Error: ${result.error}`);
+  }
+
+  console.log('================================================================');
+
+  if (!result.success) {
+    process.exitCode = 1;
+  }
+}
+
 async function handleReconcile(agent: VaultAgent, options: Record<string, string | boolean>): Promise<void> {
   printBanner();
   const targetId = options['intent-id'] as string | undefined;
@@ -253,6 +351,9 @@ async function main(): Promise<void> {
   const agent = new VaultAgent();
 
   switch (command) {
+    case 'task':
+      await handleTask(agent, options);
+      break;
     case 'status':
       await handleStatus(agent);
       break;

@@ -39,6 +39,9 @@ export interface AgentConfig {
   rpcTimeoutMs: number;
   lockTtlMs: number;
   allowPlaintextEnv: boolean;
+  llmProvider: string;
+  geminiApiKey: string | null;
+  geminiModel: string;
 }
 
 export const EXPECTED_RESTRICTED_PUBLIC_KEY = 'ed25519:2H8EupC9ApTAPYPMu3a5DWxDdcX6X3wX22tcqsocV9Kq';
@@ -70,6 +73,9 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     : process.env.AGENT_PHASE1_STRICT_BOUNDARY !== 'false';
   const rpcTimeoutMs = overrides.rpcTimeoutMs || (process.env.AGENT_RPC_TIMEOUT_MS ? Number(process.env.AGENT_RPC_TIMEOUT_MS) : DEFAULT_RPC_TIMEOUT_MS);
   const lockTtlMs = overrides.lockTtlMs || (process.env.AGENT_LOCK_TTL_MS ? Number(process.env.AGENT_LOCK_TTL_MS) : DEFAULT_LOCK_TTL_MS);
+  const llmProvider = overrides.llmProvider || process.env.LLM_PROVIDER || 'mock';
+  const geminiApiKey = overrides.geminiApiKey !== undefined ? overrides.geminiApiKey : (process.env.GEMINI_API_KEY || null);
+  const geminiModel = overrides.geminiModel || process.env.GEMINI_MODEL || 'gemini-1.5-flash';
 
   return {
     networkId,
@@ -85,6 +91,9 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     rpcTimeoutMs,
     lockTtlMs,
     allowPlaintextEnv,
+    llmProvider,
+    geminiApiKey,
+    geminiModel,
   };
 }
 
@@ -92,10 +101,11 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
  * Returns a sanitized copy of configuration safe for logging or terminal display.
  * Strictly guarantees that private keys and sensitive credentials are never serialized or leaked.
  */
-export function getSafeConfig(config: AgentConfig): Omit<AgentConfig, 'privateKey'> & { hasPrivateKey: boolean } {
-  const { privateKey, ...safe } = config;
+export function getSafeConfig(config: AgentConfig): Omit<AgentConfig, 'privateKey' | 'geminiApiKey'> & { hasPrivateKey: boolean; hasGeminiApiKey: boolean } {
+  const { privateKey, geminiApiKey, ...safe } = config;
   return {
     ...safe,
     hasPrivateKey: Boolean(privateKey && privateKey.trim().length > 0),
+    hasGeminiApiKey: Boolean(geminiApiKey && geminiApiKey.trim().length > 0),
   };
 }

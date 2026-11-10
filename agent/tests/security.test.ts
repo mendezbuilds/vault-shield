@@ -7,14 +7,19 @@ import type { PaymentIntent } from '../dist/types.js';
 
 test('Security: getSafeConfig strictly strips privateKey from output', () => {
   const secret = 'ed25519:5Mh8G9...sensitive_secret_here...';
+  const geminiSecret = 'AIzaSyA...sensitive_gemini_key_here...';
   const config = loadConfig({
     privateKey: secret,
+    geminiApiKey: geminiSecret,
   });
 
   const safe = getSafeConfig(config);
   assert.strictEqual((safe as any).privateKey, undefined);
+  assert.strictEqual((safe as any).geminiApiKey, undefined);
   assert.strictEqual(safe.hasPrivateKey, true);
+  assert.strictEqual(safe.hasGeminiApiKey, true);
   assert.strictEqual(JSON.stringify(safe).includes(secret), false);
+  assert.strictEqual(JSON.stringify(safe).includes(geminiSecret), false);
 });
 
 test('Security: previewPayload never leaks private key material', () => {
