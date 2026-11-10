@@ -190,16 +190,47 @@ export class MockLLMProvider implements LLMProvider {
 
     // Extract NEAR amount: "0.1 NEAR", "0.1NEAR", "50 NEAR", "50.0 NEAR"
     const amountMatch = trimmed.match(/([0-9]+(?:\.[0-9]+)?)\s*(?:NEAR|near|N)\b/);
-    // Extract destination: "to <account>", "recipient: <account>"
-    const destMatch = trimmed.match(/\b(?:to|recipient|destination)\s+([a-zA-Z0-9._-]+)/i);
-    // Extract reason: "for <reason>", "reason: <reason>"
-    const reasonMatch = trimmed.match(/\b(?:for|reason:?)\s+([^.\n]+)/i);
 
-    if (destMatch && amountMatch) {
-      const destination = destMatch[1].trim();
+    // Extract destination candidates across all to/from/recipient/destination keywords
+    const destMatches = Array.from(
+      trimmed.matchAll(/\b(?:to|from|recipient|destination)\s+([a-zA-Z0-9._-]+)/gi)
+    );
+    let destination: string | null = null;
+
+    // Prefer candidate that passes NEAR account ID syntax validation
+    for (const m of destMatches) {
+      const candidate = m[1].replace(/[.,;:!?]+$/, '').trim();
+      if (isValidNearAccountId(candidate)) {
+        destination = candidate;
+        break;
+      }
+    }
+
+    // If no candidate passes syntax (e.g. testing invalid destination syntax), take non-article candidate
+    if (!destination && destMatches.length > 0) {
+      const nonArticle = destMatches.find(
+        m => !['a', 'an', 'the'].includes(m[1].toLowerCase())
+      );
+      destination = (nonArticle || destMatches[0])[1].replace(/[.,;:!?]+$/, '').trim();
+    }
+
+    if (destination && amountMatch) {
       const amountNear = amountMatch[1].trim();
-      let reason = reasonMatch ? reasonMatch[1].trim() : 'AI Agent Task Payment';
-      if (isOverrideOrTransfer && !reasonMatch) {
+
+      // Clean reason extraction
+      let reason = 'AI Agent Task Payment';
+      const worthOfMatch = trimmed.match(/worth\s+of\s+([^.,\n]+)/i);
+      const isForAmount = /\bfor\s+[0-9]/i.test(trimmed);
+      const forMatch = !isForAmount ? trimmed.match(/\b(?:for|reason:?)\s+([^.,\n]+)/i) : null;
+      const actionMatch = trimmed.match(/^(?:purchase|subscribe(?:\s+to)?|pay(?:\s+for)?|procure)\s+([^.,\n]+?)(?:\s+from|\s+to|\s+for|\s+[0-9]|$)/i);
+
+      if (worthOfMatch) {
+        reason = worthOfMatch[1].trim();
+      } else if (forMatch) {
+        reason = forMatch[1].trim();
+      } else if (actionMatch) {
+        reason = actionMatch[1].trim();
+      } else if (isOverrideOrTransfer) {
         reason = 'Adversarial instruction payment';
       }
 

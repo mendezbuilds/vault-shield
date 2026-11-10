@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { VaultAgent, parseNearToYocto, formatYoctoToNear } from './agent.js';
 import { generateIntentId } from './ledger.js';
+import { ScenarioHarness } from './harness.js';
 
 function parseArgs(args: string[]): { command: string; options: Record<string, string | boolean> } {
   const command = args[0] || 'help';
@@ -35,6 +36,8 @@ function printHelp(): void {
   printBanner();
   console.log('Usage: agent <command> [options]\n');
   console.log('Commands:');
+  console.log('  demo [--scenario <auto|approval|injection|all>] [--provider <mock|gemini>] [--fixture]');
+  console.log('      Execute Day 2 policy scenarios and demonstration harness.\n');
   console.log('  task --prompt <text> [--dry-run] [--live] [--provider <mock|gemini>]');
   console.log('      Execute natural-language AI task through Vault Shield security layer.\n');
   console.log('  status');
@@ -346,11 +349,46 @@ async function handleReconcile(agent: VaultAgent, options: Record<string, string
   console.log('================================================================');
 }
 
+async function handleDemo(agent: VaultAgent, options: Record<string, string | boolean>): Promise<void> {
+  const rawScenario = (options.scenario as string) || (options._positionalPrompt as string) || 'all';
+  const scenario = rawScenario.toLowerCase().trim();
+  const providerName = options.provider as string | undefined;
+  const useFixture = Boolean(options.fixture);
+
+  const harness = new ScenarioHarness(agent, {
+    providerName,
+    useFixture,
+  });
+
+  if (scenario === 'all') {
+    const report = await harness.runAll({ providerName, useFixture });
+    if (!report.allPassed) {
+      process.exitCode = 1;
+    }
+  } else if (scenario === 'auto' || scenario === 'approval' || scenario === 'injection') {
+    const result = await harness.runScenario(scenario, { providerName, useFixture });
+    if (!result.passed) {
+      process.exitCode = 1;
+    }
+  } else {
+    console.error(`\n❌ Unknown scenario: "${rawScenario}". Supported scenarios: auto, approval, injection, all.\n`);
+    console.log('Examples:');
+    console.log('  npm run agent demo -- --scenario auto');
+    console.log('  npm run agent demo -- --scenario approval');
+    console.log('  npm run agent demo -- --scenario injection');
+    console.log('  npm run agent demo\n');
+    process.exitCode = 1;
+  }
+}
+
 async function main(): Promise<void> {
   const { command, options } = parseArgs(process.argv.slice(2));
   const agent = new VaultAgent();
 
   switch (command) {
+    case 'demo':
+      await handleDemo(agent, options);
+      break;
     case 'task':
       await handleTask(agent, options);
       break;

@@ -57,7 +57,19 @@ cp .env.agent.example .env.agent
 
 ## 4. CLI Commands
 
-### 4.1 Execute Natural-Language AI Agent Task (Task 1.1)
+### 4.1 Run Policy Demonstration Suite (Day 2)
+Executes reproducible, dry-run demonstration scenarios proving that AI agent tasks strictly respect Vault Shield's security and policy boundaries across all 3 canonical routes (Autonomous spend, Human approval queue, Prompt injection defense):
+```bash
+# Run all 3 demonstration scenarios:
+npm run agent demo
+
+# Run individual scenarios:
+npm run agent demo -- --scenario auto
+npm run agent demo -- --scenario approval
+npm run agent demo -- --scenario injection
+```
+
+### 4.2 Execute Natural-Language AI Agent Task (Task 1.1)
 Accepts a natural-language task prompt, generates structured tool calls via the configured provider (`mock` or `gemini`), validates arguments with defense-in-depth, and routes execution through the Vault Shield policy and restricted signer pipeline:
 ```bash
 npm run agent task -- --prompt "Pay 0.1 NEAR to merchant.vault-parent.testnet for API compute credits"
