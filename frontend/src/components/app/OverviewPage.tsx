@@ -21,6 +21,7 @@ import {
   Wallet,
   RefreshCw,
   Loader2,
+  Bot,
 } from 'lucide-react';
 
 interface OverviewPageProps {
@@ -181,6 +182,39 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({
             )}
           </div>
         </div>
+      </div>
+
+      {/* AI AGENT COCKPIT HIGHLIGHT BANNER */}
+      <div className="p-4 sm:p-5 rounded-3xl bg-gradient-to-r from-near-dark via-charcoal-900 to-charcoal-950 text-white shadow-soft flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex items-center gap-3.5">
+          <div className="w-10 h-10 rounded-2xl bg-white/10 border border-white/20 flex items-center justify-center text-near-green shrink-0">
+            <Bot className="w-5 h-5 text-near-green" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-[9px] sm:text-[10px] font-mono font-bold uppercase tracking-wider text-near-green">
+                AI AGENT SECURITY COCKPIT
+              </span>
+              <span className="text-[9px] font-mono bg-white/15 px-2 py-0.5 rounded-full text-white/90">
+                DAY 3 READY
+              </span>
+            </div>
+            <h3 className="text-sm sm:text-base font-extrabold text-white mt-0.5">
+              Live AI Intent to Contract Security Pipeline & Scenario Runner
+            </h3>
+            <p className="text-xs text-white/70 max-w-2xl font-sans mt-0.5">
+              Inspect how the AI agent formulates payment intents and how Vault Shield preflight enforces spending caps, allowlists, and prompt injection defense.
+            </p>
+          </div>
+        </div>
+
+        <button
+          onClick={() => onNavigate('agents')}
+          className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-near-green hover:bg-emerald-400 text-charcoal-950 text-xs font-bold transition-all shadow-soft shrink-0"
+        >
+          <span>Launch AI Cockpit</span>
+          <ChevronRight className="w-4 h-4 text-charcoal-950" />
+        </button>
       </div>
 
       {/* CONNECTED WALLET BALANCE CARD (STRICTLY SEPARATE FROM AUTONOMOUS VAULT CAPITAL) */}
