@@ -46,6 +46,7 @@ function printHelp(): void {
   console.log('  --amount <near>         Payment amount in NEAR (e.g. 0.15)');
   console.log('  --reason <text>         Audit reason description');
   console.log('  --dry-run               Run simulation and payload construction without broadcast');
+  console.log('  --live                  Authorize live on-chain broadcast (requires AGENT_PHASE1_STRICT_BOUNDARY=false)');
   console.log('  --ttl <seconds>         Optional request TTL in seconds (300 to 86400)');
   console.log('  --intent-id <id>        Custom unique intent ID for idempotency tracking\n');
   console.log('Strict Execution Boundary:');
@@ -154,7 +155,16 @@ async function handleRequest(agent: VaultAgent, options: Record<string, string |
   const dest = options.dest as string;
   const amount = options.amount as string;
   const reason = options.reason as string;
-  const isDryRun = options['dry-run'] !== undefined ? Boolean(options['dry-run']) : true;
+  let isDryRun: boolean | undefined = undefined;
+  if (options['dry-run'] === false || options['dry-run'] === 'false') {
+    isDryRun = false;
+  } else if (options['dry-run'] === true || options['dry-run'] === 'true') {
+    isDryRun = true;
+  } else if (options['live'] === true || options['live'] === 'true') {
+    isDryRun = false;
+  }
+
+  const effectiveDryRun = isDryRun !== undefined ? isDryRun : agent.getConfig().phase1StrictBoundary;
   const intentId = (options['intent-id'] as string) || generateIntentId();
   const ttl = options.ttl ? Number(options.ttl) : undefined;
 
@@ -169,7 +179,7 @@ async function handleRequest(agent: VaultAgent, options: Record<string, string |
   console.log(`  Destination: ${dest}`);
   console.log(`  Amount:      ${amount} NEAR`);
   console.log(`  Reason:      ${reason}`);
-  console.log(`  Execution:   ${isDryRun ? 'DRY-RUN (Simulation & Payload Verification)' : 'LIVE'}\n`);
+  console.log(`  Execution:   ${effectiveDryRun ? 'DRY-RUN (Simulation & Payload Verification)' : 'LIVE ON-CHAIN BROADCAST'}\n`);
 
   const result = await agent.requestPayment(
     {
@@ -179,7 +189,7 @@ async function handleRequest(agent: VaultAgent, options: Record<string, string |
       ttlSeconds: ttl,
       intentId,
     },
-    { dryRun: isDryRun }
+    isDryRun !== undefined ? { dryRun: isDryRun } : {}
   );
 
   console.log('LIFECYCLE OUTCOME:');
