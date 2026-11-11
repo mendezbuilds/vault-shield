@@ -11,7 +11,7 @@ import { SecurityCenterPage } from './SecurityCenterPage';
 import { SettingsPage } from './SettingsPage';
 import { PaymentRequestModal } from './PaymentRequestModal';
 import { TxNotificationModal } from '../common/TxNotificationModal';
-import { VaultAccountOverview } from '../../types/contract';
+import { VaultAccountOverview, VAULT_CONTRACT_ID } from '../../types/contract';
 import {
   Loader2,
   LayoutDashboard,
@@ -54,7 +54,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
             Querying NEAR Public Testnet...
           </h2>
           <p className="text-xs text-charcoal-500 font-mono">
-            contract.vault-parent.testnet
+            {VAULT_CONTRACT_ID}
           </p>
         </div>
       </div>
@@ -106,6 +106,20 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
           isRefreshing={loading}
           onExitToLanding={onExitToLanding}
         />
+
+        {overview && !overview.isDeployed && (
+          <div className="bg-amber-500/15 border-b border-amber-500/30 px-4 py-2.5 text-xs text-amber-950 font-mono flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse shrink-0" />
+              <span>
+                <strong>PRE-PROVISIONING STAGE:</strong> Vault target <code className="font-bold underline">{overview.contractId}</code> is awaiting Step 1 on-chain deployment. Read-only pre-flight inspection active.
+              </span>
+            </div>
+            <span className="text-[10px] uppercase font-bold text-amber-800 bg-amber-100 px-2 py-0.5 rounded border border-amber-300 shrink-0">
+              Zero-Key Target Architecture
+            </span>
+          </div>
+        )}
 
         <main className="flex-1 p-3.5 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full pb-28 md:pb-12 min-w-0">
           {currentPage === 'overview' && (

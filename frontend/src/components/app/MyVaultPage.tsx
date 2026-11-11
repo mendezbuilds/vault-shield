@@ -46,7 +46,7 @@ export const MyVaultPage: React.FC<MyVaultPageProps> = ({ overview, onRefresh })
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [withdrawDest, setWithdrawDest] = useState(overview.ownerId);
 
-  const isOwner = role === 'owner' || accountId === overview.ownerId;
+  const isOwner = Boolean(overview.isInitialized) && (role === 'owner' || (accountId ? accountId.toLowerCase() === overview.ownerId?.toLowerCase() : false));
 
   // Handlers
   const handleTogglePause = async () => {
@@ -456,7 +456,7 @@ export const MyVaultPage: React.FC<MyVaultPageProps> = ({ overview, onRefresh })
         isOpen={isPolicyModalOpen}
         onClose={() => setIsPolicyModalOpen(false)}
         title="Configure Spending Policy"
-        description="Updates on-chain governance policy boundaries stored directly in contract.vault-parent.testnet."
+        description={`Updates on-chain governance policy boundaries stored directly in ${overview.contractId}.`}
       >
         <form onSubmit={handleUpdatePolicy} className="space-y-4">
           <div>
@@ -530,7 +530,7 @@ export const MyVaultPage: React.FC<MyVaultPageProps> = ({ overview, onRefresh })
             </label>
             <input
               type="text"
-              placeholder="e.g. merchant.vault-parent.testnet"
+              placeholder="e.g. whiteice2105.testnet"
               value={newDestAccount}
               onChange={e => setNewDestAccount(e.target.value)}
               className="w-full px-3.5 py-2.5 rounded-xl bg-ivory-warm border border-border text-xs sm:text-sm font-mono text-charcoal-900 focus:outline-none focus:border-charcoal-800"

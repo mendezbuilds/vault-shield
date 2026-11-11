@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { VaultAccountOverview } from '../../types/contract';
 import { Modal } from '../common/Modal';
 import { useWallet } from '../../context/WalletContext';
+import { nearRpc } from '../../services/nearRpc';
 import { getExplorerAccountUrl } from '../../utils/formatters';
 import { AiAgentCockpit } from './AiAgentCockpit';
 import {
@@ -16,6 +17,9 @@ import {
   ShieldCheck,
   Terminal,
   Users,
+  Search,
+  CheckCircle2,
+  XCircle,
 } from 'lucide-react';
 
 interface AgentsPageProps {
@@ -36,32 +40,34 @@ export const AgentsPage: React.FC<AgentsPageProps> = ({
   const [newAgentId, setNewAgentId] = useState('');
   const [revokingAgent, setRevokingAgent] = useState<string | null>(null);
 
-  const isOwner = role === 'owner' || accountId === overview.ownerId;
+  // Dynamic on-chain agent authorization lookup (via is_agent_authorized)
+  const [lookupAgentId, setLookupAgentId] = useState('');
+  const [lookupResult, setLookupResult] = useState<{ checked: boolean; isAuthorized: boolean; queriedId: string } | null>(null);
+  const [lookupLoading, setLookupLoading] = useState(false);
 
-  // Track known agents from overview & testnet topology
-  const allKnownAgents = [
-    {
-      id: 'agent-a.vault-parent.testnet',
-      label: 'Autonomous Worker Agent Alpha',
-      isAuthorized: overview.authorizedAgents.includes('agent-a.vault-parent.testnet'),
-      description: 'Primary testnet autonomous worker delegated with payment initiation capability.',
-    },
-    {
-      id: 'agent-rev.vault-parent.testnet',
-      label: 'Compromised / Revoked Agent (Security Test)',
-      isAuthorized: overview.authorizedAgents.includes('agent-rev.vault-parent.testnet'),
-      description: 'Revoked test identity demonstrating instant cryptographic isolation.',
-    },
-    // Any extra agents added dynamically
-    ...overview.authorizedAgents
-      .filter(a => a !== 'agent-a.vault-parent.testnet' && a !== 'agent-rev.vault-parent.testnet')
-      .map(a => ({
-        id: a,
-        label: 'Custom Autonomous Agent',
-        isAuthorized: true,
-        description: 'Dynamically registered on-chain agent delegate.',
-      })),
-  ];
+  const isOwner = role === 'owner' || (Boolean(accountId) && accountId === overview.ownerId);
+
+  // Dynamic verified agents from on-chain state
+  const allKnownAgents = overview.authorizedAgents.map(a => ({
+    id: a,
+    label: `Autonomous Agent Delegate (${a})`,
+    isAuthorized: true,
+    description: 'Cryptographically registered and authorized spending agent in vault storage.',
+  }));
+
+  const handleCheckAgent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!lookupAgentId.trim()) return;
+    setLookupLoading(true);
+    try {
+      const isAuth = await nearRpc.isAgentAuthorized(lookupAgentId.trim());
+      setLookupResult({ checked: true, isAuthorized: isAuth, queriedId: lookupAgentId.trim() });
+    } catch {
+      setLookupResult({ checked: true, isAuthorized: false, queriedId: lookupAgentId.trim() });
+    } finally {
+      setLookupLoading(false);
+    }
+  };
 
   const handleRegisterAgent = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -206,83 +212,137 @@ export const AgentsPage: React.FC<AgentsPageProps> = ({
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 gap-4">
-                {allKnownAgents.map(agent => (
-                  <div
-                    key={agent.id}
-                    className={`p-5 sm:p-7 rounded-3xl border transition-all ${
-                      agent.isAuthorized
-                        ? 'bg-white/85 border-white/90 shadow-card'
-                        : 'bg-ivory-warm/40 border-border/80 opacity-80'
-                    }`}
-                  >
-                    <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
-                      <div className="flex items-start gap-3 sm:gap-4 min-w-0">
-                        <div
-                          className={`w-10 h-10 sm:w-12 sm:h-12 rounded-2xl flex items-center justify-center shrink-0 ${
-                            agent.isAuthorized
-                              ? 'bg-near-light text-near-dark'
-                              : 'bg-rose-50 text-rose-600'
-                          }`}
-                        >
-                          <Bot className="w-5 h-5 sm:w-6 sm:h-6" />
-                        </div>
+              {allKnownAgents.length === 0 ? (
+                <div className="p-8 rounded-3xl bg-white/80 border border-dashed border-charcoal-300 text-center space-y-3">
+                  <div className="w-12 h-12 rounded-2xl bg-near-light text-near-dark flex items-center justify-center mx-auto">
+                    <Bot className="w-6 h-6" />
+                  </div>
+                  <h4 className="text-sm font-bold text-charcoal-900">No Autonomous Agents Registered Yet</h4>
+                  <p className="text-xs text-charcoal-600 max-w-md mx-auto">
+                    The vault contract currently has zero registered agent delegates. Use the &ldquo;Register Agent&rdquo; button above (calling <code className="font-mono text-near-dark font-bold">add_agent</code>) or verify any agent account ID below using the authoritative <code className="font-mono text-near-dark font-bold">is_agent_authorized()</code> method.
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-4">
+                  {allKnownAgents.map(agent => (
+                    <div
+                      key={agent.id}
+                      className="p-5 sm:p-7 rounded-3xl border bg-white/85 border-white/90 shadow-card transition-all"
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+                        <div className="flex items-start gap-3 sm:gap-4 min-w-0">
+                          <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-2xl flex items-center justify-center shrink-0 bg-near-light text-near-dark">
+                            <Bot className="w-5 h-5 sm:w-6 sm:h-6" />
+                          </div>
 
-                        <div className="min-w-0 space-y-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <h3 className="text-sm sm:text-base font-extrabold text-charcoal-900">
-                              {agent.label}
-                            </h3>
-                            {agent.isAuthorized ? (
+                          <div className="min-w-0 space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h3 className="text-sm sm:text-base font-extrabold text-charcoal-900">
+                                {agent.label}
+                              </h3>
                               <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-near-light text-near-dark font-mono text-[10px] font-bold border border-near-green/30">
                                 <span className="w-1.5 h-1.5 rounded-full bg-near-green animate-pulse" />
                                 AUTHORIZED SPENDER
                               </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-rose-50 text-rose-800 font-mono text-[10px] font-bold border border-rose-300">
-                                REVOKED / DEAUTHORIZED
-                              </span>
-                            )}
-                          </div>
+                            </div>
 
-                          <div>
-                            <a
-                              href={getExplorerAccountUrl(agent.id)}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="font-mono text-xs font-bold text-charcoal-600 hover:text-near-dark underline inline-flex items-center gap-1.5 break-all"
-                            >
-                              <span>{agent.id}</span>
-                              <ExternalLink className="w-3.5 h-3.5 text-charcoal-400 shrink-0" />
-                            </a>
-                          </div>
+                            <div>
+                              <a
+                                href={getExplorerAccountUrl(agent.id)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="font-mono text-xs font-bold text-charcoal-600 hover:text-near-dark underline inline-flex items-center gap-1.5 break-all"
+                              >
+                                <span>{agent.id}</span>
+                                <ExternalLink className="w-3.5 h-3.5 text-charcoal-400 shrink-0" />
+                              </a>
+                            </div>
 
-                          <p className="text-xs text-charcoal-500 font-sans pt-1 leading-relaxed">
-                            {agent.description}
-                          </p>
+                            <p className="text-xs text-charcoal-500 font-sans pt-1 leading-relaxed">
+                              {agent.description}
+                            </p>
+                          </div>
                         </div>
+
+                        {/* Revoke Action */}
+                        {isOwner && (
+                          <button
+                            onClick={() => setRevokingAgent(agent.id)}
+                            className="self-end sm:self-start inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 text-xs font-bold transition-all shadow-soft shrink-0 touch-manipulation"
+                          >
+                            <UserX className="w-3.5 h-3.5 text-rose-600" />
+                            <span>Revoke Access</span>
+                          </button>
+                        )}
                       </div>
 
-                      {/* Revoke Action */}
-                      {isOwner && agent.isAuthorized && (
-                        <button
-                          onClick={() => setRevokingAgent(agent.id)}
-                          className="self-end sm:self-start inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 text-xs font-bold transition-all shadow-soft shrink-0 touch-manipulation"
-                        >
-                          <UserX className="w-3.5 h-3.5 text-rose-600" />
-                          <span>Revoke Access</span>
-                        </button>
-                      )}
+                      <div className="mt-4 pt-4 border-t border-border/70 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] font-mono text-charcoal-500">
+                        <div>Scope: <code className="text-charcoal-900 bg-ivory-warm px-1.5 py-0.5 rounded">request_payment</code> only</div>
+                        <div>&bull;</div>
+                        <div>Max Pending: 2 requests</div>
+                      </div>
                     </div>
+                  ))}
+                </div>
+              )}
+            </div>
 
-                    <div className="mt-4 pt-4 border-t border-border/70 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] font-mono text-charcoal-500">
-                      <div>Scope: <code className="text-charcoal-900 bg-ivory-warm px-1.5 py-0.5 rounded">request_payment</code> only</div>
-                      <div>&bull;</div>
-                      <div>Max Pending: 2 requests</div>
+            {/* AUTHORITATIVE ON-CHAIN AGENT INSPECTOR (is_agent_authorized) */}
+            <div className="p-5 sm:p-7 rounded-3xl bg-white/85 backdrop-blur-xl border border-white/90 shadow-card space-y-4">
+              <div className="border-b border-border/70 pb-3">
+                <span className="text-[9px] sm:text-[10px] font-mono font-bold uppercase tracking-widest text-near-dark bg-near-light px-2.5 py-0.5 rounded-full border border-near-green/30">
+                  AUTHORITATIVE CONTRACT ABI READ
+                </span>
+                <h3 className="text-base sm:text-lg font-bold text-charcoal-900 mt-1">
+                  On-Chain Agent Authorization Inspector
+                </h3>
+                <p className="text-xs text-charcoal-600">
+                  Query the contract&rsquo;s live <code className="font-mono text-near-dark font-bold">is_agent_authorized(agent_id)</code> view method to verify whether an account has active spending delegation.
+                </p>
+              </div>
+
+              <form onSubmit={handleCheckAgent} className="flex flex-col sm:flex-row gap-2.5">
+                <input
+                  type="text"
+                  placeholder="Enter Account ID (e.g. agent.testnet)"
+                  value={lookupAgentId}
+                  onChange={e => setLookupAgentId(e.target.value)}
+                  className="flex-1 px-3.5 py-2.5 rounded-xl bg-ivory-warm border border-border text-xs sm:text-sm font-mono text-charcoal-900 focus:outline-none focus:border-charcoal-800"
+                />
+                <button
+                  type="submit"
+                  disabled={lookupLoading || !lookupAgentId.trim()}
+                  className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-near-dark hover:bg-near-green text-white text-xs font-bold shadow-soft transition-all disabled:opacity-50 touch-manipulation"
+                >
+                  <Search className="w-4 h-4" />
+                  <span>Verify Authorization</span>
+                </button>
+              </form>
+
+              {lookupResult && (
+                <div className={`p-4 rounded-2xl border text-xs font-mono flex items-center justify-between ${
+                  lookupResult.isAuthorized
+                    ? 'bg-emerald-50/80 border-emerald-300 text-emerald-900'
+                    : 'bg-rose-50/80 border-rose-300 text-rose-900'
+                }`}>
+                  <div className="flex items-center gap-2.5">
+                    {lookupResult.isAuthorized ? (
+                      <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                    ) : (
+                      <XCircle className="w-5 h-5 text-rose-600 shrink-0" />
+                    )}
+                    <div>
+                      <span className="font-bold">{lookupResult.queriedId}</span> is{' '}
+                      <span className="font-bold underline">
+                        {lookupResult.isAuthorized ? 'AUTHORIZED ON-CHAIN' : 'NOT AUTHORIZED'}
+                      </span>
                     </div>
                   </div>
-                ))}
-              </div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider opacity-75">
+                    is_agent_authorized &rarr; {String(lookupResult.isAuthorized)}
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* FUNCTION-CALL ACCESS KEY SECURITY DISCIPLINE */}

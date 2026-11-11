@@ -1,7 +1,14 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
-import { VAULT_CONTRACT_ID } from '../types/contract';
+import {
+  VAULT_CONTRACT_ID,
+  DEFAULT_METHOD_GAS,
+  MAX_PROTOCOL_GAS,
+  StagedTransaction
+} from '../types/contract';
 import { nearRpc } from '../services/nearRpc';
 import { nearWallet, SupportedWalletId } from '../services/nearWallet';
+import { TxStagingModal } from '../components/common/TxStagingModal';
+import { formatNear } from '../utils/formatters';
 
 export type UserRole = 'owner' | 'agent' | 'user';
 export type AuthType = 'genuine_wallet' | 'evaluation_persona';
@@ -48,32 +55,18 @@ const STORAGE_AUTH_TYPE_KEY = 'near_vault_auth_type';
 
 export const KNOWN_PERSONAS = [
   {
-    id: 'owner.vault-parent.testnet',
-    label: 'Vault Owner Persona',
+    id: 'cleartoad8704.testnet',
+    label: 'Vault Owner Account',
     role: 'owner' as UserRole,
-    description: 'Owner governance authority for testing policy updates, approvals, pauses & withdrawals.',
-    badge: 'GOVERNANCE EVALUATION',
+    description: 'Designated vault owner governance identity on NEAR Testnet.',
+    badge: 'VAULT OWNER',
   },
   {
-    id: 'agent-a.vault-parent.testnet',
-    label: 'Agent Alpha Persona',
-    role: 'agent' as UserRole,
-    description: 'Authorized AI agent for testing request_payment() within policy constraints.',
-    badge: 'AUTHORIZED AGENT',
-  },
-  {
-    id: 'agent-rev.vault-parent.testnet',
-    label: 'Revoked Agent Persona',
-    role: 'agent' as UserRole,
-    description: 'Deauthorized agent for testing zero-state Policy Denial invariant on-chain.',
-    badge: 'REVOKED AGENT',
-  },
-  {
-    id: 'relayer.vault-parent.testnet',
-    label: 'Public Relayer Persona',
+    id: 'whiteice2105.testnet',
+    label: 'Allowlisted Destination',
     role: 'user' as UserRole,
-    description: 'Permissionless actor for testing TTL request expiry invocation.',
-    badge: 'PUBLIC RELAYER',
+    description: 'Approved payment recipient identity for autonomous test disbursements.',
+    badge: 'APPROVED RECIPIENT',
   },
 ];
 
@@ -88,6 +81,10 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [isConnecting, setIsConnecting] = useState<boolean>(false);
   const [txStatus, setTxStatus] = useState<TxStatus>({ state: 'idle' });
 
+  // Staged transaction state for pre-flight review modal
+  const [stagedTx, setStagedTx] = useState<StagedTransaction | null>(null);
+  const [pendingConfirm, setPendingConfirm] = useState<((approved: boolean) => void) | null>(null);
+
   const fetchBalanceForAccount = useCallback(async (targetId: string | null) => {
     if (!targetId) {
       setWalletBalance(null);
@@ -100,8 +97,13 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setBalanceError(null);
     try {
       const acct = await nearRpc.viewAccount(targetId);
-      setWalletBalance(acct.amount || '0');
-      setBalanceError(null);
+      if (acct) {
+        setWalletBalance(acct.amount || '0');
+        setBalanceError(null);
+      } else {
+        setWalletBalance(null);
+        setBalanceError('Account not found on testnet');
+      }
     } catch (err: any) {
       console.warn(`[WalletContext] Failed to fetch balance for ${targetId}:`, err);
       const msg = err?.message || '';
@@ -156,12 +158,12 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         }
 
         const savedAccount = localStorage.getItem(STORAGE_ACCOUNT_KEY);
-        const savedAuthType = (localStorage.getItem(STORAGE_AUTH_TYPE_KEY) as AuthType) || 'evaluation_persona';
+        const savedAuthType = (localStorage.getItem(STORAGE_AUTH_TYPE_KEY) as AuthType) || 'genuine_wallet';
         if (savedAccount) {
           await resolveRole(savedAccount, savedAuthType);
         }
       } catch (err) {
-        console.warn('Wallet initialization check:', err);
+        console.warn('[WalletContext] Wallet initialization check:', err);
       }
     };
 
@@ -172,18 +174,20 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     };
   }, []);
 
+  /**
+   * Resolves role authoritatively against the live contract's get_owner() and is_agent_authorized().
+   * If contract is not deployed or uninitialized, defaults to 'user' (observer mode).
+   */
   const resolveRole = async (targetId: string, type: AuthType) => {
     try {
-      const owner = await nearRpc.callViewFunction<string>('get_owner').catch(() => 'owner.vault-parent.testnet');
+      const owner = await nearRpc.callViewFunction<string>('get_owner');
       let resolvedRole: UserRole = 'user';
 
-      if (targetId === owner) {
+      if (owner && targetId.toLowerCase() === owner.toLowerCase()) {
         resolvedRole = 'owner';
       } else {
-        const isAuthorized = await nearRpc
-          .callViewFunction<boolean>('is_agent_authorized', { agent_id: targetId })
-          .catch(() => false);
-        if (isAuthorized || targetId.includes('agent-a')) {
+        const isAuthorized = await nearRpc.isAgentAuthorized(targetId);
+        if (isAuthorized) {
           resolvedRole = 'agent';
         }
       }
@@ -194,13 +198,14 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       localStorage.setItem(STORAGE_ACCOUNT_KEY, targetId);
       localStorage.setItem(STORAGE_AUTH_TYPE_KEY, type);
     } catch {
+      // Contract uninitialized or view call failed: assign observer mode
       setAccountId(targetId);
       setRole('user');
       setAuthType(type);
     }
   };
 
-  const connectGenuineWallet = async (targetWallet: SupportedWalletId = 'my-near-wallet') => {
+  const connectGenuineWallet = async (targetWallet: SupportedWalletId = 'meteor-wallet') => {
     setIsConnecting(true);
     try {
       if (targetWallet === 'meteor-wallet') {
@@ -253,43 +258,117 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setTxStatus({ state: 'idle' });
   };
 
+  /**
+   * Staged contract call execution:
+   * 1. Resolves and validates method-specific gas against protocol limits (max 300 Tgas).
+   * 2. Displays the Pre-Flight Staged Transaction Review Modal.
+   * 3. Requires explicit confirmation from the user before delegating to Meteor Wallet.
+   */
   const executeContractCall = async (
     methodName: string,
     args: Record<string, any> = {},
-    deposit: string = '0 NEAR',
-    gas: string = '100.0 Tgas'
+    deposit: string = '0',
+    gas?: string
   ): Promise<{ success: boolean; txHash?: string | null; error?: string }> => {
     if (!accountId) {
-      return { success: false, error: 'Please connect a testnet wallet or persona first' };
+      return { success: false, error: 'Please connect Meteor Wallet (cleartoad8704.testnet) first' };
     }
 
+    // 1. Resolve gas allocation
+    let resolvedGasStr = gas || DEFAULT_METHOD_GAS[methodName] || '50000000000000';
+    // If passed in Tgas format (e.g. '50.0 Tgas' or '50 Tgas')
+    if (resolvedGasStr.toLowerCase().includes('tgas')) {
+      const numeric = parseFloat(resolvedGasStr);
+      resolvedGasStr = (BigInt(Math.round(numeric * 1e12))).toString();
+    }
+
+    let gasUnits: bigint;
+    try {
+      gasUnits = BigInt(resolvedGasStr);
+    } catch {
+      return { success: false, error: `Invalid gas allocation specified: "${resolvedGasStr}"` };
+    }
+
+    if (gasUnits <= 0n) {
+      return { success: false, error: 'Gas allocation must be greater than zero' };
+    }
+    if (gasUnits > MAX_PROTOCOL_GAS) {
+      return {
+        success: false,
+        error: `Gas allocation of ${Number(gasUnits) / 1e12} Tgas exceeds NEAR protocol limit (300 Tgas)`,
+      };
+    }
+
+    // 2. Resolve deposit
+    let depositYocto = '0';
+    if (deposit) {
+      const cleanDeposit = deposit.toLowerCase().replace('near', '').trim();
+      if (cleanDeposit && cleanDeposit !== '0') {
+        try {
+          depositYocto = BigInt(cleanDeposit).toString();
+        } catch {
+          // If in NEAR units (e.g. "0.01")
+          depositYocto = (BigInt(Math.round(parseFloat(cleanDeposit) * 1e24))).toString();
+        }
+      }
+    }
+
+    // 3. Construct exact Staged Transaction payload
+    const staged: StagedTransaction = {
+      network: 'NEAR Public Testnet',
+      signerId: accountId,
+      receiverId: VAULT_CONTRACT_ID,
+      methodName,
+      args,
+      depositYocto,
+      depositNear: depositYocto === '0' ? '0 NEAR' : `${formatNear(depositYocto, 4)} NEAR`,
+      gasUnits: gasUnits.toString(),
+      gasTgas: `${(Number(gasUnits) / 1e12).toFixed(1)} Tgas`,
+    };
+
+    setStagedTx(staged);
+
+    // 4. Await user confirmation via the Pre-Flight Staging Review Modal
+    const userConfirmed = await new Promise<boolean>((resolve) => {
+      setPendingConfirm(() => resolve);
+    });
+
+    setStagedTx(null);
+    setPendingConfirm(null);
+
+    if (!userConfirmed) {
+      setTxStatus({ state: 'idle' });
+      return { success: false, error: 'Transaction was cancelled by user before signing' };
+    }
+
+    // 5. User confirmed in modal -> proceed to Meteor Wallet extension
     setTxStatus({
-      state: 'preparing',
-      message: `Preparing on-chain transaction for ${methodName}...`,
+      state: 'signing',
+      message: `Awaiting signature in Meteor Wallet (${accountId})...`,
     });
 
     try {
-      setTxStatus({
-        state: 'signing',
-        message: authType === 'genuine_wallet'
-          ? `Requesting signature from NEAR Wallet (${accountId})...`
-          : `Signing on testnet as evaluation persona (${accountId})...`,
-      });
-
       if (authType === 'genuine_wallet') {
-        const hash = await nearWallet.signAndSendTransaction(methodName, args, '0', '30000000000000');
+        const hash = await nearWallet.signAndSendTransaction(
+          methodName,
+          args,
+          staged.depositYocto,
+          staged.gasUnits
+        );
+
         setTxStatus({
           state: 'confirmed',
           message: 'Transaction successfully executed on NEAR Testnet!',
           txHash: hash,
         });
+
         if (accountId) {
           fetchBalanceForAccount(accountId).catch(console.warn);
         }
         return { success: true, txHash: hash };
       }
 
-      // Persona route: Dispatch through local NEAR testnet executor
+      // Fallback for mock evaluation persona if active
       const response = await fetch('/api/tx/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -297,13 +376,12 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           method_name: methodName,
           args,
           signer_id: accountId,
-          deposit,
-          gas,
+          deposit: staged.depositNear,
+          gas: staged.gasTgas,
         }),
       });
 
       const resData = await response.json();
-
       if (!response.ok || !resData.success) {
         const errMsg = resData.error || 'Transaction execution failed';
         setTxStatus({
@@ -323,7 +401,6 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       if (accountId) {
         fetchBalanceForAccount(accountId).catch(console.warn);
       }
-
       return { success: true, txHash: resData.txHash };
     } catch (err: any) {
       const errMsg = err?.message || 'Transaction execution error';
@@ -346,7 +423,7 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     if (authType !== 'genuine_wallet') {
       return {
         success: false,
-        error: 'Native deposits require genuine Web3 wallet signing (Meteor Wallet or MyNearWallet). Simulated personas cannot execute native transfers.',
+        error: 'Native deposits require genuine Web3 wallet signing (Meteor Wallet or MyNearWallet).',
       };
     }
 
@@ -387,6 +464,10 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     }
   };
 
+  if (typeof window !== 'undefined' && Boolean(import.meta.env?.DEV)) {
+    (window as any).__testExecuteContractCall = executeContractCall;
+  }
+
   return (
     <WalletContext.Provider
       value={{
@@ -410,6 +491,12 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       }}
     >
       {children}
+      {/* Reusable Pre-Flight Staged Transaction Review Modal */}
+      <TxStagingModal
+        stagedTx={stagedTx}
+        onConfirm={() => pendingConfirm && pendingConfirm(true)}
+        onCancel={() => pendingConfirm && pendingConfirm(false)}
+      />
     </WalletContext.Provider>
   );
 };

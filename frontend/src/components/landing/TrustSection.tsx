@@ -13,8 +13,8 @@ export const TrustSection: React.FC = () => {
     },
     {
       metric: 'Phase 2 Testnet Deployment',
-      val: 'contract.vault-parent.testnet',
-      desc: 'Live on NEAR Public Testnet with real gas fees, block times, and verifiable state transitions.',
+      val: VAULT_CONTRACT_ID,
+      desc: 'Target on NEAR Public Testnet with real gas fees, block times, and verifiable state transitions.',
     },
     {
       metric: 'Storage Solvency Enforced',

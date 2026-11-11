@@ -12,7 +12,7 @@
  * - Visually tags all data origins as either LIVE RPC SNAPSHOT or BASELINE FIXTURE.
  */
 
-import { VaultAccountOverview } from '../types/contract';
+import { VaultAccountOverview, VAULT_CONTRACT_ID } from '../types/contract';
 import { parseNearToYocto, formatNear } from '../utils/formatters';
 
 export const RESTRICTED_AGENT_ID = 'agent-a.vault-parent.testnet';
@@ -314,7 +314,7 @@ export function runSimulationScenario(
   // Policy context: explicitly record origins
   const dataSource: DataSourceContext = {
     isLiveRpc,
-    contractId: overview?.contractId || 'contract.vault-parent.testnet',
+    contractId: overview?.contractId || VAULT_CONTRACT_ID,
     policySource: isLiveRpc ? 'Live Contract Policy Snapshot (get_policy)' : 'Standard Baseline Fixture',
     solvencySource: isLiveRpc ? 'Live Liquid Solvency Query (get_available_liquid_balance)' : 'Standard Baseline Fixture (0.2488 NEAR)',
     queueSource: isLiveRpc ? 'Live Contract Queue Count' : 'Baseline Fixture (0/2 slots)',
@@ -621,7 +621,7 @@ export function runSimulationScenario(
   const signerPreview =
     routing !== 'DENIED'
       ? {
-          contractId: overview?.contractId || 'contract.vault-parent.testnet',
+          contractId: overview?.contractId || VAULT_CONTRACT_ID,
           methodName: 'request_payment',
           args: {
             destination,

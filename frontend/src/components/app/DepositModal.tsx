@@ -83,8 +83,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({
   }, [isOpen]);
 
   const isOwner =
-    accountId === overview.ownerId ||
-    accountId === 'owner.vault-parent.testnet' ||
+    (accountId ? accountId.toLowerCase() === overview.ownerId?.toLowerCase() : false) ||
     role === 'owner';
 
   // Validation

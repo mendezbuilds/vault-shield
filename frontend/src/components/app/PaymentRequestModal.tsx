@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Modal } from '../common/Modal';
 import { parseNearToYocto, formatNear } from '../../utils/formatters';
 import { useWallet } from '../../context/WalletContext';
-import { VaultAccountOverview } from '../../types/contract';
+import { VaultAccountOverview, VAULT_CONTRACT_ID, EXPECTED_OWNER_ID } from '../../types/contract';
 import {
   Send,
   Zap,
@@ -30,7 +30,9 @@ export const PaymentRequestModal: React.FC<PaymentRequestModalProps> = ({
 }) => {
   const { executeContractCall, accountId, isConnected } = useWallet();
 
-  const [destination, setDestination] = useState('merchant.vault-parent.testnet');
+  const [destination, setDestination] = useState(
+    overview?.policy?.destination_allowlist?.[0] || 'whiteice2105.testnet'
+  );
   const [amountNear, setAmountNear] = useState('0.15');
   const [reason, setReason] = useState('AI Agent Inference Compute Cluster #104');
   const [ttlMinutes, setTtlMinutes] = useState('60');
@@ -139,7 +141,7 @@ export const PaymentRequestModal: React.FC<PaymentRequestModalProps> = ({
       isOpen={isOpen}
       onClose={onClose}
       title="Submit Agent Payment Request"
-      description="Dispatches request_payment() directly to contract.vault-parent.testnet."
+      description={`Dispatches request_payment() directly to ${overview?.contractId || VAULT_CONTRACT_ID}.`}
     >
       <form onSubmit={handleSubmit} className="space-y-4">
         {/* SIGNER IDENTIFICATION & ROLE STRIP */}
@@ -204,7 +206,7 @@ export const PaymentRequestModal: React.FC<PaymentRequestModalProps> = ({
               <span>Agent Signer Validation Guard</span>
             </div>
             <p className="text-[11px] leading-relaxed text-amber-950/90">
-              The deployed contract accepts payment requests only from the vault owner (<span className="font-mono font-bold text-amber-950">{ownerId || 'owner.vault-parent.testnet'}</span>) or authorized agents (<span className="font-mono font-bold text-amber-950">{authorizedAgents.join(', ') || 'agent-a.vault-parent.testnet'}</span>).
+              The deployed contract accepts payment requests only from the vault owner (<span className="font-mono font-bold text-amber-950">{ownerId || EXPECTED_OWNER_ID}</span>) or authorized agents (<span className="font-mono font-bold text-amber-950">{authorizedAgents.join(', ') || 'No active agents'}</span>).
             </p>
             <div className="p-2.5 rounded-xl bg-white/80 border border-amber-200 text-[11px] space-y-1">
               <div className="flex items-center gap-1.5 font-bold text-amber-900 font-mono text-[10px] uppercase">
@@ -236,15 +238,15 @@ export const PaymentRequestModal: React.FC<PaymentRequestModalProps> = ({
             <button
               type="button"
               disabled={!canBrowserDispatch}
-              onClick={() => setDestination('merchant.vault-parent.testnet')}
+              onClick={() => setDestination(overview?.policy?.destination_allowlist?.[0] || 'whiteice2105.testnet')}
               className="px-2 py-1 rounded-lg bg-surface-white hover:bg-ivory-warm text-near-dark border border-border font-mono font-bold touch-manipulation disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              merchant.vault-parent.testnet (Allowlisted)
+              {overview?.policy?.destination_allowlist?.[0] || 'whiteice2105.testnet'} (Allowlisted)
             </button>
             <button
               type="button"
               disabled={!canBrowserDispatch}
-              onClick={() => setDestination('unlisted-vendor.vault-parent.testnet')}
+              onClick={() => setDestination('unlisted-vendor.testnet')}
               className="px-2 py-1 rounded-lg bg-surface-white hover:bg-ivory-warm text-amber-800 border border-border font-mono font-bold touch-manipulation disabled:opacity-50 disabled:cursor-not-allowed"
             >
               unlisted-vendor.testnet (New Dest)

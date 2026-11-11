@@ -1,6 +1,7 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { AlertCircle } from 'lucide-react';
+import { VAULT_CONTRACT_ID, EXPECTED_OWNER_ID } from '../../types/contract';
 
 export const ArchitectureSection: React.FC = () => {
   const steps = [
@@ -8,8 +9,8 @@ export const ArchitectureSection: React.FC = () => {
       num: '01',
       phase: 'GOVERNANCE',
       title: 'Vault Owner',
-      desc: 'Holds FullAccess key. Sets spending policies, approves exceptional payment intents, and initiates emergency pauses.',
-      account: 'owner.vault-parent.testnet',
+      desc: 'Owner governance authority. Sets spending policies, approves exceptional payment intents, and initiates emergency pauses.',
+      account: EXPECTED_OWNER_ID,
       highlight: false,
     },
     {
@@ -23,9 +24,9 @@ export const ArchitectureSection: React.FC = () => {
     {
       num: '03',
       phase: 'AUTONOMOUS',
-      title: 'AI Agent',
-      desc: 'Signs transactions using the restricted key to communicate payment intent, reason memo, and TTL window.',
-      account: 'agent-a.vault-parent.testnet',
+      title: 'AI Agent Delegate',
+      desc: 'Dispatches spending transactions using a restricted key to communicate payment intent, reason memo, and TTL window.',
+      account: 'Delegated Agent ID',
       highlight: false,
     },
     {
@@ -33,7 +34,7 @@ export const ArchitectureSection: React.FC = () => {
       phase: 'ENFORCEMENT',
       title: 'Vault Contract',
       desc: 'Evaluates limits, reserves liquidity, issues NEAR transfer promises, and records tamper-evident audit records.',
-      account: 'contract.vault-parent.testnet',
+      account: VAULT_CONTRACT_ID,
       highlight: true,
     },
   ];

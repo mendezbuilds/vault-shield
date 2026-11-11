@@ -619,18 +619,18 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({
           <div className="flex items-center gap-2 text-charcoal-600 min-w-0">
             <span className="w-2.5 h-2.5 rounded-full bg-near-dark shrink-0" />
             <div className="truncate">
-              <div className="font-bold text-charcoal-900 text-[10px] sm:text-[11px]">Agent Alpha</div>
+              <div className="font-bold text-charcoal-900 text-[10px] sm:text-[11px]">Primary Agent</div>
               <div className="text-[9px] sm:text-[10px] text-charcoal-400 truncate">
-                {overview.authorizedAgents[0] || 'agent-a.vault-parent.testnet'}
+                {overview.authorizedAgents[0] || 'None Registered'}
               </div>
             </div>
           </div>
           <div className="flex items-center gap-2 text-charcoal-600 min-w-0">
             <span className="w-2.5 h-2.5 rounded-full bg-amber-500 shrink-0" />
             <div className="truncate">
-              <div className="font-bold text-charcoal-900 text-[10px] sm:text-[11px]">Merchant</div>
+              <div className="font-bold text-charcoal-900 text-[10px] sm:text-[11px]">Approved Destination</div>
               <div className="text-[9px] sm:text-[10px] text-charcoal-400 truncate">
-                {overview.policy.destination_allowlist[0] || 'merchant.vault-parent.testnet'}
+                {overview.policy.destination_allowlist[0] || 'whiteice2105.testnet'}
               </div>
             </div>
           </div>

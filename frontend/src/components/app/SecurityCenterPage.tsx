@@ -13,6 +13,7 @@ import {
   RotateCcw,
   Search,
   ExternalLink,
+  Trash2,
 } from 'lucide-react';
 
 interface SecurityCenterPageProps {
@@ -33,7 +34,11 @@ export const SecurityCenterPage: React.FC<SecurityCenterPageProps> = ({ overview
   const [attestedResolution, setAttestedResolution] = useState<'Executed' | 'Failed'>('Executed');
   const [evidenceTxHash, setEvidenceTxHash] = useState('');
 
-  const isOwner = role === 'owner' || accountId === overview.ownerId;
+  // Prune tombstone modal
+  const [isPruneModalOpen, setIsPruneModalOpen] = useState(false);
+  const [pruneEvidence, setPruneEvidence] = useState('');
+
+  const isOwner = role === 'owner' || (Boolean(accountId) && accountId === overview.ownerId);
 
   // Aggregate stats from audit buffer
   const denials = overview.auditRecords.filter(r => r.event_type === 'PaymentPolicyDenied');
@@ -67,6 +72,21 @@ export const SecurityCenterPage: React.FC<SecurityCenterPageProps> = ({ overview
     if (res.success) {
       setReconcileReqId('');
       setEvidenceTxHash('');
+      onRefresh();
+    }
+  };
+
+  const handlePruneTombstone = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!tombstoneQueryId || !pruneEvidence.trim()) return;
+    setIsPruneModalOpen(false);
+    const res = await executeContractCall('prune_reconciled_tombstone', {
+      request_id: Number(tombstoneQueryId),
+      verification_evidence: pruneEvidence.trim(),
+    });
+    if (res.success) {
+      setTombstoneResult(null);
+      setPruneEvidence('');
       onRefresh();
     }
   };
@@ -319,12 +339,24 @@ export const SecurityCenterPage: React.FC<SecurityCenterPageProps> = ({ overview
                   No tombstone record found for Request #{tombstoneQueryId}. This request has not been reconciled as a dead promise.
                 </div>
               ) : (
-                <div className="space-y-1">
+                <div className="space-y-2">
                   <div className="font-bold text-near-dark">Tombstone Verified on NEAR Testnet:</div>
                   <div>Resolution: {tombstoneResult.attested_resolution}</div>
                   <div>Amount: {formatNear(tombstoneResult.amount, 4)} NEAR</div>
                   <div>Evidence Tx: <code className="break-all">{tombstoneResult.evidence_tx_hash}</code></div>
                   <div>Reconciled At: {formatTimestamp(tombstoneResult.reconciled_at)}</div>
+                  {isOwner && (
+                    <div className="pt-2">
+                      <button
+                        type="button"
+                        onClick={() => setIsPruneModalOpen(true)}
+                        className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all shadow-sm flex items-center gap-1.5"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Prune Tombstone Storage (prune_reconciled_tombstone)</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -394,6 +426,58 @@ export const SecurityCenterPage: React.FC<SecurityCenterPageProps> = ({ overview
               className="px-5 py-2 rounded-xl bg-cyan-700 hover:bg-cyan-800 text-white text-xs font-bold shadow-soft transition-all"
             >
               Attest &amp; Reconcile
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* MODAL: Prune Reconciled Tombstone */}
+      <Modal
+        isOpen={isPruneModalOpen}
+        onClose={() => setIsPruneModalOpen(false)}
+        title="Prune Reconciled Tombstone Storage"
+        description="Permanently prune a finalized tombstone record from contract state to reclaim storage stake on NEAR Testnet."
+      >
+        <form onSubmit={handlePruneTombstone} className="space-y-4">
+          <div>
+            <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-charcoal-500 block mb-1">
+              Request ID
+            </label>
+            <input
+              type="number"
+              value={tombstoneQueryId}
+              readOnly
+              className="w-full px-3.5 py-2.5 rounded-xl bg-ivory-warm border border-border text-xs sm:text-sm font-mono text-charcoal-600 cursor-not-allowed"
+            />
+          </div>
+
+          <div>
+            <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-charcoal-500 block mb-1">
+              Verification Evidence / Audit Note
+            </label>
+            <input
+              type="text"
+              placeholder="e.g. Audit verified in NearBlocks explorer tx 8KqP..."
+              value={pruneEvidence}
+              onChange={e => setPruneEvidence(e.target.value)}
+              className="w-full px-3.5 py-2.5 rounded-xl bg-ivory-warm border border-border text-xs sm:text-sm font-mono text-charcoal-900 focus:outline-none focus:border-charcoal-800"
+              required
+            />
+          </div>
+
+          <div className="pt-3 flex justify-end gap-2.5">
+            <button
+              type="button"
+              onClick={() => setIsPruneModalOpen(false)}
+              className="px-4 py-2 rounded-xl text-xs font-bold text-charcoal-600 hover:text-charcoal-900"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-soft transition-all"
+            >
+              Prune Tombstone
             </button>
           </div>
         </form>

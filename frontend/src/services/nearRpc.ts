@@ -1,5 +1,7 @@
 import {
   VAULT_CONTRACT_ID,
+  EXPECTED_OWNER_ID,
+  FROZEN_WASM_CODE_HASH,
   TESTNET_RPC_URL,
   BACKUP_TESTNET_RPC_URL,
   SpendingPolicyView,
@@ -38,14 +40,20 @@ class NearRpcClient {
             return data.result;
           }
           if (data.error && data.error.code !== -429) {
-            console.error('[nearRpc] callRpc RPC error:', data.error);
-            throw new Error(data.error.message || JSON.stringify(data.error));
+            const errStr = data.error.data || data.error.message || JSON.stringify(data.error);
+            const err = new Error(errStr);
+            (err as any).rpcError = data.error;
+            throw err;
           }
         } else {
           console.warn('[nearRpc] callRpc HTTP error:', response.status);
         }
       } catch (err: any) {
-        console.warn(`[nearRpc] callRpc attempt ${attempt + 1} failed:`, err?.message || err);
+        const msg = err?.message || String(err);
+        if (msg.includes('does not exist') || msg.includes('UNKNOWN_ACCOUNT') || msg.includes('CompilationError') || msg.includes('MethodNotFound')) {
+          throw err; // Non-retryable deterministic contract/account error
+        }
+        console.warn(`[nearRpc] callRpc attempt ${attempt + 1} failed:`, msg);
         if (attempt === retries - 1 && !this.backupUrl) throw err;
       }
       await new Promise(r => setTimeout(r, 120 * (attempt + 1)));
@@ -71,7 +79,7 @@ class NearRpcClient {
   }
 
   /**
-   * Invokes a view method on a NEAR contract and parses the base64 JSON response.
+   * Invokes a view method on the vault contract and parses the base64 JSON response.
    */
   public async callViewFunction<T>(methodName: string, args: Record<string, any> = {}): Promise<T> {
     const argsJson = JSON.stringify(args);
@@ -100,25 +108,44 @@ class NearRpcClient {
   public async viewAccount(accountId: string = VAULT_CONTRACT_ID): Promise<{
     amount: string;
     locked: string;
+    code_hash: string;
     storage_usage: number;
     block_height: number;
-  }> {
-    return this.callRpc('query', {
-      request_type: 'view_account',
-      finality: 'final',
-      account_id: accountId,
-    });
+  } | null> {
+    try {
+      return await this.callRpc('query', {
+        request_type: 'view_account',
+        finality: 'final',
+        account_id: accountId,
+      });
+    } catch (err: any) {
+      const msg = err?.message || String(err);
+      if (msg.includes('does not exist') || msg.includes('UNKNOWN_ACCOUNT')) {
+        return null;
+      }
+      throw err;
+    }
   }
 
   /**
-   * Fetches all core vault parameters in staged batches to avoid rate-limiting testnet nodes.
+   * Authoritative read method for checking whether an agent account is authorized.
+   * Matches the exact contract ABI: `pub fn is_agent_authorized(&self, agent_id: AccountId) -> bool`
    */
+  public async isAgentAuthorized(agentId: string): Promise<boolean> {
+    try {
+      return await this.callViewFunction<boolean>('is_agent_authorized', { agent_id: agentId });
+    } catch {
+      return false;
+    }
+  }
+
   private cachedOverview: VaultAccountOverview | null = null;
   private lastFetchedTime: number = 0;
   private inflightOverviewPromise: Promise<VaultAccountOverview> | null = null;
 
   /**
    * Fetches all core vault parameters with caching and in-flight de-duplication.
+   * Gracefully handles uncreated or uninitialized contract states without crashing.
    */
   public async fetchVaultOverview(): Promise<VaultAccountOverview> {
     const now = Date.now();
@@ -130,66 +157,195 @@ class NearRpcClient {
     }
 
     this.inflightOverviewPromise = (async () => {
-      console.log('[nearRpc] Starting staged fetchVaultOverview...');
-      
-      // Stage 1: Basic account & owner governance metadata (4 parallel)
-      const [accountMeta, ownerId, policy, isPaused] = await Promise.all([
-        this.viewAccount(VAULT_CONTRACT_ID),
-        this.callViewFunction<string>('get_owner'),
-        this.callViewFunction<SpendingPolicyView>('get_policy'),
-        this.callViewFunction<boolean>('is_paused')
-      ]);
+      console.log(`[nearRpc] Querying vault state for ${VAULT_CONTRACT_ID}...`);
 
-      // Stage 2: Core solvency metrics (4 parallel)
-      const [storageReserveRequirement, protectedBalance, availableLiquidBalance, pendingReserved] = await Promise.all([
-        this.callViewFunction<string>('get_storage_reserve_requirement'),
-        this.callViewFunction<string>('get_protected_balance'),
-        this.callViewFunction<string>('get_available_liquid_balance'),
-        this.callViewFunction<string>('get_pending_reserved')
-      ]);
+      // 1. Query account metadata from NEAR Protocol
+      let accountMeta: {
+        amount: string;
+        locked: string;
+        code_hash: string;
+        storage_usage: number;
+        block_height: number;
+      } | null = null;
 
-      // Stage 3: Queue & daily bucket (3 parallel)
-      const [inflightReserved, globalPendingCount, dailyBucket] = await Promise.all([
-        this.callViewFunction<string>('get_inflight_reserved'),
-        this.callViewFunction<number>('get_global_pending_count'),
-        this.callViewFunction<DailyBucketView>('get_daily_bucket')
-      ]);
+      try {
+        accountMeta = await this.viewAccount(VAULT_CONTRACT_ID);
+      } catch (err: any) {
+        console.warn(`[nearRpc] Vault account ${VAULT_CONTRACT_ID} not found on testnet:`, err?.message);
+      }
 
-      // Stage 4: Pending lists, audits & authorized agents (4 parallel)
-      const [pendingRequests, auditRecords, isAgentAAuthorized, isAgentRevAuthorized] = await Promise.all([
-        this.callViewFunction<PaymentRequestView[]>('get_pending_requests', { limit: 32 }).catch(() => []),
-        this.callViewFunction<CompactAuditRecord[]>('get_audit_records', { limit: 50 }).catch(() => []),
-        this.callViewFunction<boolean>('is_agent_authorized', { agent_id: 'agent-a.vault-parent.testnet' }).catch(() => false),
-        this.callViewFunction<boolean>('is_agent_authorized', { agent_id: 'agent-rev.vault-parent.testnet' }).catch(() => false)
-      ]);
+      // If account does not exist on Testnet yet (prior to Step 1 authorization)
+      if (!accountMeta) {
+        const unprovisionedOverview: VaultAccountOverview = {
+          contractId: VAULT_CONTRACT_ID,
+          ownerId: EXPECTED_OWNER_ID,
+          totalAccountBalance: '0',
+          storageUsageBytes: 0,
+          storageReserveRequirement: '0',
+          protectedBalance: '0',
+          availableLiquidBalance: '0',
+          pendingReserved: '0',
+          inflightReserved: '0',
+          globalPendingCount: 0,
+          policy: {
+            max_per_transaction: '1000000000000000000000000', // 1 NEAR
+            daily_cap: '2000000000000000000000000',           // 2 NEAR
+            auto_approval_threshold: '200000000000000000000000', // 0.2 NEAR
+            destination_allowlist: ['whiteice2105.testnet'],
+            is_paused: false,
+          },
+          isPaused: false,
+          dailyBucket: { bucket_index: 0, spent: '0', reserved: '0', last_updated_at: 0 },
+          pendingRequests: [],
+          auditRecords: [],
+          authorizedAgents: [],
+          isDeployed: false,
+          isInitialized: false,
+          codeHashMatches: false,
+        };
+        this.cachedOverview = unprovisionedOverview;
+        this.lastFetchedTime = Date.now();
+        return unprovisionedOverview;
+      }
 
-      const authorizedAgents: string[] = [];
-      if (isAgentAAuthorized) authorizedAgents.push('agent-a.vault-parent.testnet');
-      if (isAgentRevAuthorized) authorizedAgents.push('agent-rev.vault-parent.testnet');
+      const isDeployed = accountMeta.code_hash !== '11111111111111111111111111111111';
+      const codeHashMatches = accountMeta.code_hash === FROZEN_WASM_CODE_HASH;
 
-      const overview: VaultAccountOverview = {
-        contractId: VAULT_CONTRACT_ID,
-        ownerId,
-        totalAccountBalance: accountMeta.amount,
-        storageUsageBytes: accountMeta.storage_usage,
-        storageReserveRequirement,
-        protectedBalance,
-        availableLiquidBalance,
-        pendingReserved,
-        inflightReserved,
-        globalPendingCount,
-        policy,
-        isPaused,
-        dailyBucket,
-        pendingRequests,
-        auditRecords,
-        authorizedAgents,
-      };
+      // If contract is not deployed yet
+      if (!isDeployed) {
+        const undeployedOverview: VaultAccountOverview = {
+          contractId: VAULT_CONTRACT_ID,
+          ownerId: EXPECTED_OWNER_ID,
+          totalAccountBalance: accountMeta.amount,
+          storageUsageBytes: accountMeta.storage_usage,
+          storageReserveRequirement: '0',
+          protectedBalance: accountMeta.amount,
+          availableLiquidBalance: accountMeta.amount,
+          pendingReserved: '0',
+          inflightReserved: '0',
+          globalPendingCount: 0,
+          policy: {
+            max_per_transaction: '1000000000000000000000000',
+            daily_cap: '2000000000000000000000000',
+            auto_approval_threshold: '200000000000000000000000',
+            destination_allowlist: ['whiteice2105.testnet'],
+            is_paused: false,
+          },
+          isPaused: false,
+          dailyBucket: { bucket_index: 0, spent: '0', reserved: '0', last_updated_at: 0 },
+          pendingRequests: [],
+          auditRecords: [],
+          authorizedAgents: [],
+          isDeployed: false,
+          isInitialized: false,
+          codeHashMatches: false,
+        };
+        this.cachedOverview = undeployedOverview;
+        this.lastFetchedTime = Date.now();
+        return undeployedOverview;
+      }
 
-      this.cachedOverview = overview;
-      this.lastFetchedTime = Date.now();
-      console.log('[nearRpc] Successfully loaded and cached vault overview!');
-      return overview;
+      // 2. Fetch on-chain state via contract view methods
+      try {
+        const [ownerId, policy, isPaused] = await Promise.all([
+          this.callViewFunction<string>('get_owner'),
+          this.callViewFunction<SpendingPolicyView>('get_policy'),
+          this.callViewFunction<boolean>('is_paused'),
+        ]);
+
+        const [storageReserveRequirement, protectedBalance, availableLiquidBalance, pendingReserved] = await Promise.all([
+          this.callViewFunction<string>('get_storage_reserve_requirement'),
+          this.callViewFunction<string>('get_protected_balance'),
+          this.callViewFunction<string>('get_available_liquid_balance'),
+          this.callViewFunction<string>('get_pending_reserved'),
+        ]);
+
+        const [inflightReserved, globalPendingCount, dailyBucket] = await Promise.all([
+          this.callViewFunction<string>('get_inflight_reserved'),
+          this.callViewFunction<number>('get_global_pending_count'),
+          this.callViewFunction<DailyBucketView>('get_daily_bucket'),
+        ]);
+
+        const [pendingRequests, auditRecords] = await Promise.all([
+          this.callViewFunction<PaymentRequestView[]>('get_pending_requests', { limit: 32 }).catch(() => []),
+          this.callViewFunction<CompactAuditRecord[]>('get_audit_records', { limit: 50 }).catch(() => []),
+        ]);
+
+        // Discover active agents from audit events, then verify each with is_agent_authorized
+        const candidateAgents = new Set<string>();
+        for (const record of auditRecords) {
+          if (record.event_type === 'AgentRegistered') {
+            candidateAgents.add(record.account_id);
+          }
+        }
+
+        const authorizedAgents: string[] = [];
+        for (const agent of candidateAgents) {
+          const isAuth = await this.isAgentAuthorized(agent);
+          if (isAuth) {
+            authorizedAgents.push(agent);
+          }
+        }
+
+        const overview: VaultAccountOverview = {
+          contractId: VAULT_CONTRACT_ID,
+          ownerId,
+          totalAccountBalance: accountMeta.amount,
+          storageUsageBytes: accountMeta.storage_usage,
+          storageReserveRequirement,
+          protectedBalance,
+          availableLiquidBalance,
+          pendingReserved,
+          inflightReserved,
+          globalPendingCount,
+          policy,
+          isPaused,
+          dailyBucket,
+          pendingRequests,
+          auditRecords,
+          authorizedAgents,
+          isDeployed: true,
+          isInitialized: true,
+          codeHashMatches,
+        };
+
+        this.cachedOverview = overview;
+        this.lastFetchedTime = Date.now();
+        console.log('[nearRpc] Successfully loaded and cached vault overview!');
+        return overview;
+      } catch (err: any) {
+        console.warn('[nearRpc] Contract deployed but uninitialized or view call failed:', err?.message);
+        const uninitializedOverview: VaultAccountOverview = {
+          contractId: VAULT_CONTRACT_ID,
+          ownerId: EXPECTED_OWNER_ID,
+          totalAccountBalance: accountMeta.amount,
+          storageUsageBytes: accountMeta.storage_usage,
+          storageReserveRequirement: '0',
+          protectedBalance: accountMeta.amount,
+          availableLiquidBalance: accountMeta.amount,
+          pendingReserved: '0',
+          inflightReserved: '0',
+          globalPendingCount: 0,
+          policy: {
+            max_per_transaction: '1000000000000000000000000',
+            daily_cap: '2000000000000000000000000',
+            auto_approval_threshold: '200000000000000000000000',
+            destination_allowlist: ['whiteice2105.testnet'],
+            is_paused: false,
+          },
+          isPaused: false,
+          dailyBucket: { bucket_index: 0, spent: '0', reserved: '0', last_updated_at: 0 },
+          pendingRequests: [],
+          auditRecords: [],
+          authorizedAgents: [],
+          isDeployed: true,
+          isInitialized: false,
+          codeHashMatches,
+        };
+        this.cachedOverview = uninitializedOverview;
+        this.lastFetchedTime = Date.now();
+        return uninitializedOverview;
+      }
     })().finally(() => {
       this.inflightOverviewPromise = null;
     });

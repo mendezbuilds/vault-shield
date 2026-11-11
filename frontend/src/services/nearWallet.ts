@@ -1,7 +1,11 @@
-import { setupWalletSelector, WalletSelector, Wallet, actionCreators } from '@near-wallet-selector/core';
+import { setupWalletSelector, WalletSelector, actionCreators } from '@near-wallet-selector/core';
 import { setupMyNearWallet } from '@near-wallet-selector/my-near-wallet';
 import { setupMeteorWallet } from '@near-wallet-selector/meteor-wallet';
-import { VAULT_CONTRACT_ID } from '../types/contract';
+import {
+  VAULT_CONTRACT_ID,
+  MAX_PROTOCOL_GAS,
+  DEFAULT_METHOD_GAS
+} from '../types/contract';
 
 export type SupportedWalletId = 'my-near-wallet' | 'meteor-wallet';
 
@@ -26,12 +30,31 @@ class NearWalletService {
     return this.selector;
   }
 
-  public async connectWallet(walletId: SupportedWalletId = 'my-near-wallet'): Promise<void> {
+  /**
+   * Connects the wallet using the verified methods of the frozen vault contract ABI.
+   * Preserves existing Meteor configuration without requesting arbitrary or full-access changes.
+   */
+  public async connectWallet(walletId: SupportedWalletId = 'meteor-wallet'): Promise<void> {
     const selector = await this.init();
     const wallet = await selector.wallet(walletId);
     await (wallet as any).signIn({
       contractId: VAULT_CONTRACT_ID,
-      methodNames: ['request_payment', 'approve_request', 'reject_request', 'expire_request', 'pause', 'unpause'],
+      methodNames: [
+        'pause',
+        'unpause',
+        'set_policy',
+        'add_destination',
+        'remove_destination',
+        'withdraw',
+        'add_agent',
+        'revoke_agent',
+        'request_payment',
+        'approve_request',
+        'reject_request',
+        'expire_request',
+        'reconcile_stuck_request',
+        'prune_reconciled_tombstone',
+      ],
     });
   }
 
@@ -72,11 +95,15 @@ class NearWalletService {
     return typeof window !== 'undefined' && Boolean((window as any).meteorWallet);
   }
 
+  /**
+   * Signs and broadcasts an owner-authorized FunctionCall transaction.
+   * Validates gas against NEAR protocol limits (max 300 Tgas) and attaches exact deposit.
+   */
   public async signAndSendTransaction(
     methodName: string,
     args: Record<string, any>,
     deposit: string = '0',
-    gas: string = '30000000000000'
+    gas?: string
   ): Promise<string | null> {
     if (!this.selector) await this.init();
     if (!this.selector) throw new Error('Wallet selector not initialized');
@@ -85,26 +112,62 @@ class NearWalletService {
     const active = state.accounts.find(a => a.active) || state.accounts[0];
     if (!active) throw new Error('No active wallet connected');
 
+    // Determine gas: caller-specified or method-specific default
+    const resolvedGasStr = gas || DEFAULT_METHOD_GAS[methodName] || '50000000000000';
+    let gasUnits: bigint;
+    try {
+      gasUnits = BigInt(resolvedGasStr);
+    } catch {
+      throw new Error(`Invalid gas string provided: "${resolvedGasStr}"`);
+    }
+
+    if (gasUnits <= 0n) {
+      throw new Error(`Gas allocation must be positive; received ${gasUnits}`);
+    }
+    if (gasUnits > MAX_PROTOCOL_GAS) {
+      throw new Error(
+        `Gas allocation (${gasUnits} units / ${Number(gasUnits) / 1e12} Tgas) exceeds NEAR protocol limit of 300 Tgas`
+      );
+    }
+
+    let depositYocto: bigint;
+    try {
+      depositYocto = BigInt(deposit || '0');
+    } catch {
+      throw new Error(`Invalid deposit string provided: "${deposit}"`);
+    }
+
     const walletId = state.selectedWalletId;
     const wallet = await (walletId ? this.selector.wallet(walletId) : this.selector.wallet());
-    const outcome = await wallet.signAndSendTransaction({
-      signerId: active.accountId,
-      receiverId: VAULT_CONTRACT_ID,
-      actions: [
-        actionCreators.functionCall(methodName, args, BigInt(gas || '30000000000000'), BigInt(deposit || '0')),
-      ],
-    });
 
-    const single = Array.isArray(outcome) ? outcome[0] : outcome;
-    if (single && typeof single === 'object') {
-      if ('transaction' in single && (single as any).transaction?.hash) {
-        return (single as any).transaction.hash;
+    try {
+      const outcome = await wallet.signAndSendTransaction({
+        signerId: active.accountId,
+        receiverId: VAULT_CONTRACT_ID,
+        actions: [
+          actionCreators.functionCall(methodName, args, gasUnits, depositYocto),
+        ],
+      });
+
+      const single = Array.isArray(outcome) ? outcome[0] : outcome;
+      if (single && typeof single === 'object') {
+        if ('transaction' in single && (single as any).transaction?.hash) {
+          return (single as any).transaction.hash;
+        }
+        if ('transaction_outcome' in single && (single as any).transaction_outcome?.id) {
+          return (single as any).transaction_outcome.id;
+        }
       }
-      if ('transaction_outcome' in single && (single as any).transaction_outcome?.id) {
-        return (single as any).transaction_outcome.id;
+      return null;
+    } catch (err: any) {
+      console.warn(`[nearWallet] Transaction execution failed:`, err);
+      // Re-throw with user-friendly error message
+      const msg = err?.message || String(err);
+      if (msg.includes('User rejected') || msg.includes('USER_CANCELLED')) {
+        throw new Error('Transaction was cancelled by user in wallet');
       }
+      throw err;
     }
-    return null;
   }
 
   /**

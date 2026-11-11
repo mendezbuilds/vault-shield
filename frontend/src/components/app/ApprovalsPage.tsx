@@ -31,7 +31,7 @@ export const ApprovalsPage: React.FC<ApprovalsPageProps> = ({ overview, onRefres
     requestId: number;
   } | null>(null);
 
-  const isOwner = role === 'owner' || accountId === overview.ownerId;
+  const isOwner = Boolean(overview.isInitialized) && (role === 'owner' || (accountId ? accountId.toLowerCase() === overview.ownerId?.toLowerCase() : false));
 
   const handleAction = async () => {
     if (!actionConfirm) return;

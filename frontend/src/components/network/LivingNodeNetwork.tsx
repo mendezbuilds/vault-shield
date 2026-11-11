@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { VaultAccountOverview } from '../../types/contract';
+import { VaultAccountOverview, VAULT_CONTRACT_ID, EXPECTED_OWNER_ID } from '../../types/contract';
 import { formatNear } from '../../utils/formatters';
 
 interface LivingNodeNetworkProps {
@@ -118,7 +118,7 @@ export const LivingNodeNetwork: React.FC<LivingNodeNetworkProps> = ({
         {
           id: 'vault',
           label: 'NEAR AI Vault',
-          sublabel: 'contract.vault-parent.testnet',
+          sublabel: VAULT_CONTRACT_ID,
           type: 'vault',
           status: vaultData?.isPaused ? 'pending' : 'active',
           x: width * 0.50,
@@ -144,7 +144,7 @@ export const LivingNodeNetwork: React.FC<LivingNodeNetworkProps> = ({
         {
           id: 'merchant',
           label: 'Allowlisted Destination',
-          sublabel: 'merchant.vault-parent.testnet',
+          sublabel: vaultData?.policy?.destination_allowlist?.[0] || 'whiteice2105.testnet',
           type: 'destination',
           status: 'active',
           x: width * 0.82,
@@ -168,7 +168,7 @@ export const LivingNodeNetwork: React.FC<LivingNodeNetworkProps> = ({
         {
           id: 'owner',
           label: 'Owner Key',
-          sublabel: vaultData ? vaultData.ownerId : 'owner.vault-parent.testnet',
+          sublabel: vaultData ? vaultData.ownerId : EXPECTED_OWNER_ID,
           type: 'owner',
           status: 'active',
           x: width * (isMobile ? 0.16 : 0.15),
@@ -180,8 +180,8 @@ export const LivingNodeNetwork: React.FC<LivingNodeNetworkProps> = ({
         },
         {
           id: 'agent',
-          label: 'Agent Alpha',
-          sublabel: 'agent-a.vault-parent.testnet',
+          label: 'Agent Delegate',
+          sublabel: vaultData?.authorizedAgents?.[0] || 'Delegated Agent',
           type: 'agent',
           status: 'active',
           x: width * (isMobile ? 0.38 : 0.38),
@@ -194,7 +194,7 @@ export const LivingNodeNetwork: React.FC<LivingNodeNetworkProps> = ({
         {
           id: 'vault',
           label: 'Smart Vault',
-          sublabel: 'contract.vault-parent.testnet',
+          sublabel: VAULT_CONTRACT_ID,
           type: 'vault',
           status: vaultData?.isPaused ? 'pending' : 'active',
           x: width * (isMobile ? 0.62 : 0.62),
@@ -207,7 +207,7 @@ export const LivingNodeNetwork: React.FC<LivingNodeNetworkProps> = ({
         {
           id: 'merchant',
           label: 'Merchant',
-          sublabel: vaultData?.policy.destination_allowlist[0] || 'merchant.vault-parent.testnet',
+          sublabel: vaultData?.policy?.destination_allowlist?.[0] || 'whiteice2105.testnet',
           type: 'destination',
           status: 'active',
           x: width * (isMobile ? 0.84 : 0.85),
