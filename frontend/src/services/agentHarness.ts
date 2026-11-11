@@ -1,14 +1,15 @@
 /**
- * Vault Shield - AI Agent Demonstration Harness & Simulation Service (Day 3)
+ * Vault Shield - AI Agent Demonstration Harness & Simulation Service (Day 4 Audited)
  *
- * Provides client-side execution simulation of the Day 2 policy scenarios
+ * Provides client-side execution simulation of the canonical Day 2 policy scenarios
  * (Scenario A: Autonomous Spend, Scenario B: Approval Queue, Scenario C: Injection Defense).
  *
- * CRITICAL SAFETY BOUNDARY:
+ * CRITICAL SAFETY & DATA INTEGRITY BOUNDARIES:
  * - Operates exclusively in DRY-RUN mode.
  * - Zero private keys or signing material accessed.
  * - Zero live blockchain transactions broadcast.
- * - Strictly separated from real on-chain state.
+ * - Strictly distinguishes client-side preflight evaluation from on-chain contract enforcement.
+ * - Visually tags all data origins as either LIVE RPC SNAPSHOT or BASELINE FIXTURE.
  */
 
 import { VaultAccountOverview } from '../types/contract';
@@ -33,6 +34,9 @@ export const STANDARD_BASELINE_FIXTURE = {
 };
 
 // Verified On-Chain Payment Proof (Phase 2 Live Transaction)
+// NOTE: Verified from testnet transaction Fz6LLxnizbMyu47KnrB2xzvj2QQ7YfzXv6788qxFMDXK on Request #13.
+// Route A (auto-dispatch) emits PaymentDispatched and PaymentExecuted.
+// PaymentPending is ONLY emitted for Route B (escrowed in pending queue).
 export const VERIFIED_PHASE2_PROOF = {
   txHash: 'Fz6LLxnizbMyu47KnrB2xzvj2QQ7YfzXv6788qxFMDXK',
   requestId: 13,
@@ -46,10 +50,11 @@ export const VERIFIED_PHASE2_PROOF = {
   explorerAccountUrl: 'https://testnet.nearblocks.io/address/contract.vault-parent.testnet',
   contractId: 'contract.vault-parent.testnet',
   events: [
-    'PaymentPending (Request #13 created)',
-    'PaymentDispatched (InFlight 0.1 NEAR to merchant.vault-parent.testnet)',
-    'PaymentExecuted (Transfer succeeded atomically)',
+    'Audit Record #39: PaymentDispatched (InFlight 0.1 NEAR to merchant.vault-parent.testnet)',
+    'Audit Record #40: PaymentExecuted (Transfer confirmed on testnet atomically)',
   ],
+  routeNote:
+    'Route A (Auto-Dispatch): Emitted PaymentDispatched & PaymentExecuted directly upon successful settlement. No PaymentPending was emitted because this transfer bypassed the pending approval queue.',
   verifiedTimestamp: 1731175200000,
 };
 
@@ -104,12 +109,19 @@ export const CANONICAL_SCENARIOS: Record<'auto' | 'approval' | 'injection', Scen
   },
 };
 
+export type CheckEvaluationType =
+  | 'CLIENT_SYNTAX'
+  | 'CLIENT_PREFLIGHT_LIVE_RPC'
+  | 'CLIENT_PREFLIGHT_FIXTURE';
+
 export interface PreflightCheckItem {
   id: string;
   name: string;
   passed: boolean;
   detail: string;
   category: 'identity' | 'bounds' | 'solvency' | 'allowlist';
+  evaluationType: CheckEvaluationType;
+  sourceLabel: string;
 }
 
 export interface PipelineStage {
@@ -120,11 +132,21 @@ export interface PipelineStage {
   data?: any;
 }
 
+export interface DataSourceContext {
+  isLiveRpc: boolean;
+  contractId: string;
+  policySource: string;
+  solvencySource: string;
+  queueSource: string;
+  agentAuthSource: string;
+}
+
 export interface SimulationResult {
   scenarioId: string;
   title: string;
   prompt: string;
   timestamp: number;
+  dataSource: DataSourceContext;
   aiDecision: {
     type: 'tool_call' | 'message';
     toolName?: string;
@@ -150,6 +172,7 @@ export interface SimulationResult {
     signerAccountId: string;
     keyFingerprint: string;
     isRestrictedFunctionCall: boolean;
+    previewNotice: string;
   };
   stages: PipelineStage[];
   mode: 'DRY_RUN';
@@ -260,12 +283,17 @@ export function parseTaskPromptToIntent(prompt: string): {
  * Runs a complete dry-run simulation of an AI task against Vault Shield policy.
  * Can evaluate against live on-chain contract state if overview is provided,
  * or standard baseline fixture otherwise.
+ *
+ * CRITICAL TRANSPARENCY REQUIREMENT:
+ * Every evaluated check is stamped with its exact data source (LIVE_RPC or FIXTURE).
  */
 export function runSimulationScenario(
   scenarioKey: 'auto' | 'approval' | 'injection' | 'custom',
   customPrompt?: string,
   overview?: VaultAccountOverview | null
 ): SimulationResult {
+  const isLiveRpc = Boolean(overview);
+
   const scenarioDef =
     scenarioKey !== 'custom'
       ? CANONICAL_SCENARIOS[scenarioKey]
@@ -283,7 +311,16 @@ export function runSimulationScenario(
   const promptToUse = customPrompt !== undefined ? customPrompt : scenarioDef.prompt;
   const aiDecision = parseTaskPromptToIntent(promptToUse);
 
-  // Policy context: prefer live overview if available, fallback to standard fixture
+  // Policy context: explicitly record origins
+  const dataSource: DataSourceContext = {
+    isLiveRpc,
+    contractId: overview?.contractId || 'contract.vault-parent.testnet',
+    policySource: isLiveRpc ? 'Live Contract Policy Snapshot (get_policy)' : 'Standard Baseline Fixture',
+    solvencySource: isLiveRpc ? 'Live Liquid Solvency Query (get_available_liquid_balance)' : 'Standard Baseline Fixture (0.2488 NEAR)',
+    queueSource: isLiveRpc ? 'Live Contract Queue Count' : 'Baseline Fixture (0/2 slots)',
+    agentAuthSource: isLiveRpc ? 'Live RPC Authorization Query' : 'Baseline Fixture (Authorized)',
+  };
+
   const policy = {
     maxPerTxYocto: overview?.policy.max_per_transaction || STANDARD_BASELINE_FIXTURE.maxPerTransactionYocto,
     dailyCapYocto: overview?.policy.daily_cap || STANDARD_BASELINE_FIXTURE.dailyCapYocto,
@@ -325,6 +362,7 @@ export function runSimulationScenario(
       title: scenarioDef.title,
       prompt: promptToUse,
       timestamp: Date.now(),
+      dataSource,
       aiDecision,
       preflightChecks: [],
       routing: 'DENIED_LOCALLY',
@@ -354,6 +392,7 @@ export function runSimulationScenario(
       title: scenarioDef.title,
       prompt: promptToUse,
       timestamp: Date.now(),
+      dataSource,
       aiDecision,
       preflightChecks: [],
       routing: 'DENIED_LOCALLY',
@@ -369,7 +408,7 @@ export function runSimulationScenario(
   const amountYocto = parseNearToYocto(amountNear);
   const amountYoctoBn = BigInt(amountYocto);
 
-  // Invariant 1: Destination Account ID Syntax
+  // Invariant 1: Destination Account ID Syntax (Client Syntax)
   const validDest = isValidNearAccountId(destination);
   preflightChecks.push({
     id: 'dest_syntax',
@@ -377,9 +416,11 @@ export function runSimulationScenario(
     passed: validDest,
     detail: validDest ? `Valid NEAR account syntax (${destination})` : `Invalid account ID: "${destination}"`,
     category: 'identity',
+    evaluationType: 'CLIENT_SYNTAX',
+    sourceLabel: 'Client Syntax Validator (NEP-0010)',
   });
 
-  // Invariant 2: Positive Transfer Amount
+  // Invariant 2: Positive Transfer Amount (Client Syntax)
   const positiveAmount = amountYoctoBn > 0n;
   preflightChecks.push({
     id: 'positive_amount',
@@ -387,29 +428,37 @@ export function runSimulationScenario(
     passed: positiveAmount,
     detail: positiveAmount ? `${amountNear} NEAR (${amountYocto} yocto)` : 'Amount must be > 0',
     category: 'bounds',
+    evaluationType: 'CLIENT_SYNTAX',
+    sourceLabel: 'Client Argument Validator',
   });
 
-  // Invariant 3: Agent Authorization Status
+  // Invariant 3: Agent Authorization Status (RPC or Fixture)
   preflightChecks.push({
     id: 'agent_auth',
     name: 'Agent Authorization Status',
     passed: policy.isAuthorized,
     detail: policy.isAuthorized
-      ? `Agent ${RESTRICTED_AGENT_ID} is registered in authorized_agents`
+      ? `Agent ${RESTRICTED_AGENT_ID} is registered in authorized_agents (${isLiveRpc ? 'Live RPC' : 'Fixture'})`
       : `Agent ${RESTRICTED_AGENT_ID} is NOT authorized on contract`,
     category: 'identity',
+    evaluationType: isLiveRpc ? 'CLIENT_PREFLIGHT_LIVE_RPC' : 'CLIENT_PREFLIGHT_FIXTURE',
+    sourceLabel: isLiveRpc ? 'Live RPC Snapshot (is_agent_authorized)' : 'Standard Baseline Fixture',
   });
 
-  // Invariant 4: Vault Emergency Pause Status
+  // Invariant 4: Vault Emergency Pause Status (RPC or Fixture)
   preflightChecks.push({
     id: 'vault_pause',
     name: 'Vault Emergency Pause Status',
     passed: !policy.isPaused,
-    detail: !policy.isPaused ? 'Vault active (unpaused)' : 'Vault is currently PAUSED',
+    detail: !policy.isPaused
+      ? `Vault active (unpaused) [${isLiveRpc ? 'Live RPC' : 'Fixture'}]`
+      : 'Vault is currently PAUSED',
     category: 'solvency',
+    evaluationType: isLiveRpc ? 'CLIENT_PREFLIGHT_LIVE_RPC' : 'CLIENT_PREFLIGHT_FIXTURE',
+    sourceLabel: isLiveRpc ? 'Live RPC Snapshot (is_paused)' : 'Standard Baseline Fixture',
   });
 
-  // Invariant 5: Per-Transaction Cap Compliance
+  // Invariant 5: Per-Transaction Cap Compliance (RPC or Fixture Policy)
   const maxPerTxBn = BigInt(policy.maxPerTxYocto);
   const underPerTxCap = amountYoctoBn <= maxPerTxBn;
   preflightChecks.push({
@@ -417,12 +466,14 @@ export function runSimulationScenario(
     name: 'Per-Transaction Spending Cap',
     passed: underPerTxCap,
     detail: underPerTxCap
-      ? `Amount (${amountNear} NEAR) <= Max Per Tx (${formatNear(policy.maxPerTxYocto, 2)} NEAR)`
-      : `Amount (${amountNear} NEAR) exceeds Max Per Tx limit (${formatNear(policy.maxPerTxYocto, 2)} NEAR)`,
+      ? `Amount (${amountNear} NEAR) <= Max Per Tx (${formatNear(policy.maxPerTxYocto, 2)} NEAR) [${isLiveRpc ? 'Live Policy' : 'Fixture'}]`
+      : `Amount (${amountNear} NEAR) exceeds Max Per Tx limit (${formatNear(policy.maxPerTxYocto, 2)} NEAR) [${isLiveRpc ? 'Live Policy' : 'Fixture'}]`,
     category: 'bounds',
+    evaluationType: isLiveRpc ? 'CLIENT_PREFLIGHT_LIVE_RPC' : 'CLIENT_PREFLIGHT_FIXTURE',
+    sourceLabel: isLiveRpc ? 'Live Contract Policy Snapshot' : 'Standard Baseline Fixture',
   });
 
-  // Invariant 6: Daily Cap & Budget Compliance
+  // Invariant 6: Daily Cap & Budget Compliance (RPC or Fixture Bucket)
   const dailyCapBn = BigInt(policy.dailyCapYocto);
   const spentBn = BigInt(policy.spentTodayYocto);
   const reservedBn = BigInt(policy.reservedTodayYocto);
@@ -434,11 +485,13 @@ export function runSimulationScenario(
     passed: underDailyCap,
     detail: underDailyCap
       ? `Total commitment (${formatNear(totalCommitmentBn.toString(), 2)} NEAR) <= Daily Cap (${formatNear(policy.dailyCapYocto, 2)} NEAR)`
-      : `Breaches daily cap (${formatNear(policy.dailyCapYocto, 2)} NEAR). Current spent+reserved: ${formatNear((spentBn + reservedBn).toString(), 2)} NEAR`,
+      : `Breaches daily cap (${formatNear(policy.dailyCapYocto, 2)} NEAR). Spent+reserved: ${formatNear((spentBn + reservedBn).toString(), 2)} NEAR`,
     category: 'bounds',
+    evaluationType: isLiveRpc ? 'CLIENT_PREFLIGHT_LIVE_RPC' : 'CLIENT_PREFLIGHT_FIXTURE',
+    sourceLabel: isLiveRpc ? 'Live Contract Daily Bucket (get_daily_bucket)' : 'Standard Baseline Fixture',
   });
 
-  // Invariant 7: Available Liquid Balance Solvency
+  // Invariant 7: Available Liquid Balance Solvency (RPC or Fixture Solvency)
   const liquidBn = BigInt(policy.liquidBalanceYocto);
   const sufficientLiquid = amountYoctoBn <= liquidBn;
   preflightChecks.push({
@@ -446,35 +499,41 @@ export function runSimulationScenario(
     name: 'Available Liquid Balance Solvency',
     passed: sufficientLiquid,
     detail: sufficientLiquid
-      ? `Amount <= Available Liquid (${formatNear(policy.liquidBalanceYocto, 4)} NEAR)`
-      : `Insufficient liquid balance (${formatNear(policy.liquidBalanceYocto, 4)} NEAR available, ${amountNear} NEAR requested)`,
+      ? `Amount <= Available Liquid (${formatNear(policy.liquidBalanceYocto, 4)} NEAR) [${isLiveRpc ? 'Live RPC Snapshot' : 'Standard Baseline Fixture'}]`
+      : `Insufficient liquid balance (${formatNear(policy.liquidBalanceYocto, 4)} NEAR available, ${amountNear} NEAR requested) [${isLiveRpc ? 'Live RPC Snapshot' : 'Standard Baseline Fixture'}]`,
     category: 'solvency',
+    evaluationType: isLiveRpc ? 'CLIENT_PREFLIGHT_LIVE_RPC' : 'CLIENT_PREFLIGHT_FIXTURE',
+    sourceLabel: isLiveRpc ? 'Live RPC Snapshot (get_available_liquid_balance)' : 'Standard Baseline Fixture (0.2488 NEAR)',
   });
 
-  // Invariant 8: Agent & Global Queue Quotas
+  // Invariant 8: Agent & Global Queue Quotas (RPC or Fixture Quota)
   const underAgentQueue = policy.agentPendingCount < 2;
   const underGlobalQueue = policy.globalPendingCount < 32;
   preflightChecks.push({
     id: 'queue_limits',
     name: 'Pending Queue Limits (Agent & Global)',
     passed: underAgentQueue && underGlobalQueue,
-    detail: `Agent queue: ${policy.agentPendingCount}/2 slots | Global queue: ${policy.globalPendingCount}/32 slots`,
+    detail: `Agent queue: ${policy.agentPendingCount}/2 slots | Global queue: ${policy.globalPendingCount}/32 slots [${isLiveRpc ? 'Live RPC' : 'Fixture'}]`,
     category: 'bounds',
+    evaluationType: isLiveRpc ? 'CLIENT_PREFLIGHT_LIVE_RPC' : 'CLIENT_PREFLIGHT_FIXTURE',
+    sourceLabel: isLiveRpc ? 'Live Contract Queue Query' : 'Standard Baseline Fixture',
   });
 
-  // Invariant 9: Destination Allowlist Membership
+  // Invariant 9: Destination Allowlist Membership (RPC or Fixture Allowlist)
   const isAllowlisted = policy.destinationAllowlist.includes(destination);
   preflightChecks.push({
     id: 'allowlist_check',
     name: 'Destination Allowlist Verification',
     passed: isAllowlisted,
     detail: isAllowlisted
-      ? `"${destination}" is explicitly verified in allowlist`
+      ? `"${destination}" is explicitly verified in allowlist [${isLiveRpc ? 'Live Policy' : 'Fixture'}]`
       : `"${destination}" is NOT in allowlist (requires human owner approval)`,
     category: 'allowlist',
+    evaluationType: isLiveRpc ? 'CLIENT_PREFLIGHT_LIVE_RPC' : 'CLIENT_PREFLIGHT_FIXTURE',
+    sourceLabel: isLiveRpc ? 'Live Contract Policy Snapshot' : 'Standard Baseline Fixture',
   });
 
-  // Invariant 10: Auto-Approval Threshold
+  // Invariant 10: Auto-Approval Threshold (RPC or Fixture Threshold)
   const autoThresholdBn = BigInt(policy.autoThresholdYocto);
   const belowThreshold = amountYoctoBn <= autoThresholdBn;
   preflightChecks.push({
@@ -482,9 +541,11 @@ export function runSimulationScenario(
     name: 'Auto-Approval Spending Threshold',
     passed: belowThreshold,
     detail: belowThreshold
-      ? `Amount (${amountNear} NEAR) <= Auto-Approval Threshold (${formatNear(policy.autoThresholdYocto, 2)} NEAR)`
-      : `Amount (${amountNear} NEAR) > Auto-Approval Threshold (${formatNear(policy.autoThresholdYocto, 2)} NEAR)`,
+      ? `Amount (${amountNear} NEAR) <= Auto-Approval Threshold (${formatNear(policy.autoThresholdYocto, 2)} NEAR) [${isLiveRpc ? 'Live Policy' : 'Fixture'}]`
+      : `Amount (${amountNear} NEAR) > Auto-Approval Threshold (${formatNear(policy.autoThresholdYocto, 2)} NEAR) [${isLiveRpc ? 'Live Policy' : 'Fixture'}]`,
     category: 'bounds',
+    evaluationType: isLiveRpc ? 'CLIENT_PREFLIGHT_LIVE_RPC' : 'CLIENT_PREFLIGHT_FIXTURE',
+    sourceLabel: isLiveRpc ? 'Live Contract Policy Snapshot' : 'Standard Baseline Fixture',
   });
 
   // Determine Routing and Outcome
@@ -498,7 +559,7 @@ export function runSimulationScenario(
     routing = 'DENIED';
     if (!underPerTxCap) {
       reasonCode = 'ExceedsPerTransactionCap';
-      policyExplanation = `Amount ${amountNear} NEAR breaches maximum per-transaction cap (${formatNear(policy.maxPerTxYocto, 2)} NEAR). Request blocked immediately.`;
+      policyExplanation = `Amount ${amountNear} NEAR breaches maximum per-transaction cap (${formatNear(policy.maxPerTxYocto, 2)} NEAR). Preflight blocked immediately before signing.`;
     } else if (!sufficientLiquid) {
       reasonCode = 'InsufficientLiquidBalance';
       policyExplanation = `Vault available liquid balance (${formatNear(policy.liquidBalanceYocto, 4)} NEAR) cannot cover requested amount.`;
@@ -518,41 +579,41 @@ export function runSimulationScenario(
   } else if (isAllowlisted && belowThreshold) {
     routing = 'AUTO_DISPATCH';
     reasonCode = 'None';
-    policyExplanation = `Destination allowlisted and amount <= ${formatNear(policy.autoThresholdYocto, 2)} NEAR threshold. Request eligible for immediate autonomous execution.`;
+    policyExplanation = `Destination allowlisted and amount <= ${formatNear(policy.autoThresholdYocto, 2)} NEAR threshold. Predicted eligible for Route A immediate autonomous execution.`;
   } else {
     routing = 'PENDING_APPROVAL';
     if (!isAllowlisted && !belowThreshold) {
       reasonCode = 'AboveThresholdAndNewDestination';
-      policyExplanation = `Destination is unlisted AND amount exceeds auto threshold (${formatNear(policy.autoThresholdYocto, 2)} NEAR). Funds held in pending escrow.`;
+      policyExplanation = `Destination is unlisted AND amount exceeds auto threshold (${formatNear(policy.autoThresholdYocto, 2)} NEAR). Predicted to hold in pending escrow for Owner approval.`;
     } else if (!isAllowlisted) {
       reasonCode = 'NewDestinationOnly';
-      policyExplanation = `Destination "${destination}" is not allowlisted. Request held in pending escrow awaiting Owner cryptographic sign-off.`;
+      policyExplanation = `Destination "${destination}" is not allowlisted. Predicted to hold in pending escrow awaiting Owner cryptographic sign-off.`;
     } else {
       reasonCode = 'AboveThresholdOnly';
-      policyExplanation = `Amount ${amountNear} NEAR exceeds auto threshold (${formatNear(policy.autoThresholdYocto, 2)} NEAR). Requires Owner approval.`;
+      policyExplanation = `Amount ${amountNear} NEAR exceeds auto threshold (${formatNear(policy.autoThresholdYocto, 2)} NEAR). Predicted to require Owner approval.`;
     }
   }
 
   // Stage 3: Invariant Engine Checklist
   stages.push({
     step: 3,
-    name: 'Policy Pre-Flight Invariant Engine',
+    name: 'Client-Side Pre-Flight Invariant Evaluation',
     status: routing === 'DENIED' ? 'rejected' : routing === 'PENDING_APPROVAL' ? 'warning' : 'passed',
-    summary: `Evaluated 10 contract invariants: ${preflightChecks.filter(c => c.passed).length}/10 Passed`,
+    summary: `Client-side advisory checks: ${preflightChecks.filter(c => c.passed).length}/10 Passed`,
     data: { checks: preflightChecks },
   });
 
   // Stage 4: Contract Routing Determination
   stages.push({
     step: 4,
-    name: 'Contract Policy Routing',
+    name: 'Predicted Policy Routing',
     status: routing === 'AUTO_DISPATCH' ? 'passed' : routing === 'PENDING_APPROVAL' ? 'warning' : 'rejected',
     summary:
       routing === 'AUTO_DISPATCH'
-        ? 'Route A: Autonomous Dispatch Eligible'
+        ? 'Predicted Route A: Autonomous Dispatch Eligible'
         : routing === 'PENDING_APPROVAL'
-        ? `Route B: Held for Human Approval (${reasonCode})`
-        : `Policy Blocked: Pre-Flight Rejection (${reasonCode})`,
+        ? `Predicted Route B: Held for Human Approval (${reasonCode})`
+        : `Predicted Route: Policy Denied Before Signing (${reasonCode})`,
     data: { routing, reasonCode, explanation: policyExplanation },
   });
 
@@ -572,17 +633,19 @@ export function runSimulationScenario(
           signerAccountId: RESTRICTED_AGENT_ID,
           keyFingerprint: RESTRICTED_KEY_FINGERPRINT,
           isRestrictedFunctionCall: true,
+          previewNotice:
+            'UNBROADCAST PAYLOAD PREVIEW ONLY — Zero private keys accessed. No transaction signed or broadcast to network.',
         }
       : undefined;
 
   stages.push({
     step: 5,
-    name: 'Cryptographic Confinement & Dry-Run Preview',
+    name: 'Function-Call Payload Preview',
     status: routing === 'DENIED' ? 'rejected' : 'passed',
     summary:
       routing === 'DENIED'
-        ? 'Zero transaction signed. Policy engine strictly terminated execution before key usage.'
-        : `Prepared restricted Function-Call transaction (attached deposit = 0). [DRY-RUN: 0 Broadcasts]`,
+        ? 'Zero transaction signed. Preflight invariant evaluation strictly terminated flow before key specification.'
+        : `Prepared restricted Function-Call payload preview (attached deposit = 0). [SIMULATION: 0 Broadcasts]`,
     data: signerPreview,
   });
 
@@ -597,6 +660,7 @@ export function runSimulationScenario(
     title: scenarioDef.title,
     prompt: promptToUse,
     timestamp: Date.now(),
+    dataSource,
     aiDecision,
     preflightChecks,
     routing,

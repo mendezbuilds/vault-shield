@@ -10,6 +10,7 @@ import {
   runSimulationScenario,
   SimulationResult,
   ScenarioDefinition,
+  STANDARD_BASELINE_FIXTURE,
 } from '../../services/agentHarness';
 import {
   Bot,
@@ -28,6 +29,9 @@ import {
   Copy,
   Check,
   Sparkles,
+  Info,
+  Database,
+  Radio,
 } from 'lucide-react';
 
 interface AiAgentCockpitProps {
@@ -54,12 +58,15 @@ export const AiAgentCockpit: React.FC<AiAgentCockpitProps> = ({ overview }) => {
   } | null>(null);
   const [isSuiteRunning, setIsSuiteRunning] = useState<boolean>(false);
 
+  // Whether data is live from RPC or from fixture
+  const isLiveRpc = Boolean(overview && overview.contractId);
+
   // Execute single scenario with smooth visual step progression
   const executeScenario = (key: 'auto' | 'approval' | 'injection' | 'custom', promptOverride?: string) => {
     setIsExecuting(true);
     setCurrentExecutionStep(1);
 
-    // Progression timer to allow judges to clearly see the pipeline stages
+    // Progression timer to allow judges to clearly inspect each pipeline stage
     setTimeout(() => setCurrentExecutionStep(2), 220);
     setTimeout(() => setCurrentExecutionStep(3), 440);
     setTimeout(() => setCurrentExecutionStep(4), 660);
@@ -114,9 +121,9 @@ export const AiAgentCockpit: React.FC<AiAgentCockpitProps> = ({ overview }) => {
     setTimeout(() => setCopiedKey(false), 2000);
   };
 
-  const pendingRequestsCount = overview.pendingRequests.filter(
-    r => r.agent_id === RESTRICTED_AGENT_ID
-  ).length;
+  const pendingRequestsCount = isLiveRpc
+    ? overview.pendingRequests.filter(r => r.agent_id === RESTRICTED_AGENT_ID).length
+    : STANDARD_BASELINE_FIXTURE.agentPendingCount;
 
   const currentScenarioDef: ScenarioDefinition =
     selectedScenarioKey !== 'custom'
@@ -126,10 +133,10 @@ export const AiAgentCockpit: React.FC<AiAgentCockpitProps> = ({ overview }) => {
           title: 'Custom User Prompt Evaluation',
           badge: 'CUSTOM SIMULATION',
           badgeColor: 'bg-purple-50 text-purple-900 border-purple-200',
-          description: 'Type any instruction to test how the AI and contract preflight evaluate the request.',
+          description: 'Type any instruction to test how the AI and client-side preflight evaluate the request.',
           prompt: customPromptInput,
           expectedRouting: 'AUTO_DISPATCH',
-          policyExplanation: 'Evaluated against active contract limits and destination allowlist.',
+          policyExplanation: 'Evaluated against active contract limits and destination allowlist in dry-run mode.',
         };
 
   return (
@@ -178,7 +185,7 @@ export const AiAgentCockpit: React.FC<AiAgentCockpitProps> = ({ overview }) => {
 
         {/* Cryptographic Confinement Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-4 mt-5">
-          {/* Agent Identity */}
+          {/* Agent Identity & Authorization */}
           <div className="p-4 rounded-2xl bg-ivory-warm/70 border border-border/80">
             <div className="text-[10px] font-mono uppercase tracking-wider text-charcoal-400 flex items-center justify-between">
               <span>Agent Identity</span>
@@ -188,7 +195,11 @@ export const AiAgentCockpit: React.FC<AiAgentCockpitProps> = ({ overview }) => {
               {RESTRICTED_AGENT_ID}
             </div>
             <div className="mt-1 text-[11px] font-sans text-charcoal-500">
-              Role: Authorized AI Task Runner
+              {isLiveRpc ? (
+                <span className="text-emerald-700 font-mono font-semibold">Live Contract Authorized</span>
+              ) : (
+                <span className="text-charcoal-500 font-mono">Baseline Fixture Authorized</span>
+              )}
             </div>
           </div>
 
@@ -223,21 +234,25 @@ export const AiAgentCockpit: React.FC<AiAgentCockpitProps> = ({ overview }) => {
               {pendingRequestsCount} / 2 Slots
             </div>
             <div className="mt-1 text-[11px] font-sans text-charcoal-500">
-              Global queue: {overview.globalPendingCount} / 32
+              {isLiveRpc ? (
+                <span>Live RPC count &bull; Global: {overview.globalPendingCount}/32</span>
+              ) : (
+                <span>Baseline fixture &bull; Global: 1/32</span>
+              )}
             </div>
           </div>
 
-          {/* Active Mode Safety Boundary */}
+          {/* Data Origin & Safety Boundary */}
           <div className="p-4 rounded-2xl bg-sky-50/70 border border-sky-200">
             <div className="text-[10px] font-mono uppercase tracking-wider text-sky-800 flex items-center justify-between">
-              <span>Execution Boundary</span>
-              <ShieldCheck className="w-3.5 h-3.5 text-sky-700" />
+              <span>Data Origin & Mode</span>
+              {isLiveRpc ? <Radio className="w-3.5 h-3.5 text-emerald-600 animate-pulse" /> : <Database className="w-3.5 h-3.5 text-sky-700" />}
             </div>
-            <div className="mt-1 font-mono font-bold text-xs sm:text-sm text-sky-950">
-              DRY-RUN / SIMULATION
+            <div className="mt-1 font-mono font-bold text-xs sm:text-sm text-sky-950 flex items-center gap-1.5">
+              <span>{isLiveRpc ? 'LIVE RPC SNAPSHOT' : 'BASELINE FIXTURE'}</span>
             </div>
             <div className="mt-1 text-[11px] font-sans text-sky-700">
-              Private keys strictly isolated
+              Evaluation: Dry-Run (0 Broadcast)
             </div>
           </div>
         </div>
@@ -254,11 +269,11 @@ export const AiAgentCockpit: React.FC<AiAgentCockpitProps> = ({ overview }) => {
             <div className="flex items-center gap-2">
               <CheckCircle2 className="w-5 h-5 text-emerald-600" />
               <h3 className="text-sm font-extrabold text-emerald-950">
-                Day 2 Scenario Harness: 3/3 Passed (Zero Regressions)
+                Day 2 Scenario Harness: 3/3 Pre-Flight Invariant Checks Verified
               </h3>
             </div>
             <span className="text-[11px] font-mono text-emerald-800 bg-white/70 px-2.5 py-0.5 rounded-full border border-emerald-300">
-              ALL INVARIANTS VERIFIED
+              DRY-RUN BENCHMARK SUITE
             </span>
           </div>
 
@@ -266,30 +281,30 @@ export const AiAgentCockpit: React.FC<AiAgentCockpitProps> = ({ overview }) => {
             <div className="p-3 rounded-xl bg-white/80 border border-emerald-200 text-xs">
               <div className="font-bold text-charcoal-900 flex items-center justify-between">
                 <span>Scenario A (Autonomous)</span>
-                <span className="text-emerald-700 font-mono text-[10px] font-bold">PASSED</span>
+                <span className="text-emerald-700 font-mono text-[10px] font-bold">VERIFIED</span>
               </div>
               <p className="text-[11px] text-charcoal-600 mt-1">
-                Route: <code className="font-bold text-emerald-700">AUTO_DISPATCH</code> &bull; 0.05 NEAR
+                Predicted: <code className="font-bold text-emerald-700">AUTO_DISPATCH</code> &bull; 0.05 NEAR
               </p>
             </div>
 
             <div className="p-3 rounded-xl bg-white/80 border border-emerald-200 text-xs">
               <div className="font-bold text-charcoal-900 flex items-center justify-between">
                 <span>Scenario B (Human Approval)</span>
-                <span className="text-emerald-700 font-mono text-[10px] font-bold">PASSED</span>
+                <span className="text-emerald-700 font-mono text-[10px] font-bold">VERIFIED</span>
               </div>
               <p className="text-[11px] text-charcoal-600 mt-1">
-                Route: <code className="font-bold text-amber-700">PENDING_APPROVAL</code> &bull; NewDestination
+                Predicted: <code className="font-bold text-amber-700">PENDING_APPROVAL</code> &bull; NewDestination
               </p>
             </div>
 
             <div className="p-3 rounded-xl bg-white/80 border border-emerald-200 text-xs">
               <div className="font-bold text-charcoal-900 flex items-center justify-between">
                 <span>Scenario C (Adversarial)</span>
-                <span className="text-emerald-700 font-mono text-[10px] font-bold">PASSED</span>
+                <span className="text-emerald-700 font-mono text-[10px] font-bold">VERIFIED</span>
               </div>
               <p className="text-[11px] text-charcoal-600 mt-1">
-                Route: <code className="font-bold text-rose-700">DENIED</code> &bull; ExceedsPerTxCap
+                Predicted: <code className="font-bold text-rose-700">DENIED</code> &bull; ExceedsPerTxCap
               </p>
             </div>
           </div>
@@ -417,11 +432,14 @@ export const AiAgentCockpit: React.FC<AiAgentCockpitProps> = ({ overview }) => {
                 rows={2}
                 className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-border text-xs sm:text-sm font-sans text-charcoal-900 focus:outline-none focus:border-charcoal-800"
               />
-              <div className="flex justify-end">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1">
+                <span className="text-[11px] font-sans text-charcoal-500">
+                  Custom evaluation runs 100% locally in dry-run mode (no on-chain broadcast).
+                </span>
                 <button
                   onClick={() => executeScenario('custom', customPromptInput)}
                   disabled={isExecuting || !customPromptInput.trim()}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-near-dark hover:bg-near-green text-white text-xs font-bold transition-all disabled:opacity-50"
+                  className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-near-dark hover:bg-near-green text-white text-xs font-bold transition-all disabled:opacity-50"
                 >
                   <Play className="w-3.5 h-3.5 text-white" />
                   <span>{isExecuting ? 'Simulating...' : 'Simulate Custom Prompt'}</span>
@@ -455,34 +473,39 @@ export const AiAgentCockpit: React.FC<AiAgentCockpitProps> = ({ overview }) => {
       <div className="p-5 sm:p-7 rounded-3xl bg-white/90 backdrop-blur-xl border border-white/95 shadow-card space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-border/70">
           <div>
-            <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-charcoal-400">
-              REAL-TIME PIPELINE MONITOR
-            </span>
-            <h3 className="text-base sm:text-lg font-extrabold text-charcoal-900">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-charcoal-400">
+                PIPELINE INSPECTION MONITOR
+              </span>
+              <span className="text-[9px] font-mono font-bold px-2 py-0.5 rounded-full bg-sky-50 text-sky-800 border border-sky-200">
+                CLIENT-SIDE DRY-RUN
+              </span>
+            </div>
+            <h3 className="text-base sm:text-lg font-extrabold text-charcoal-900 mt-0.5">
               5-Stage Security & Policy Verification Stream
             </h3>
           </div>
 
           <div className="flex items-center gap-2">
             <span className="text-[10px] font-mono text-charcoal-500">
-              Pipeline Status:
+              Predicted Route:
             </span>
             {simulationResult.routing === 'AUTO_DISPATCH' && (
               <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-300">
                 <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                AUTO-DISPATCH ELIGIBLE
+                ROUTE A (AUTO-DISPATCH)
               </span>
             )}
             {simulationResult.routing === 'PENDING_APPROVAL' && (
               <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-900 border border-amber-300">
                 <AlertTriangle className="w-3 h-3 text-amber-600" />
-                HELD IN ESCROW FOR APPROVAL
+                ROUTE B (PENDING ESCROW)
               </span>
             )}
             {simulationResult.routing === 'DENIED' && (
               <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-900 border border-rose-300">
                 <XCircle className="w-3 h-3 text-rose-600" />
-                POLICY INVARIANT BLOCKED
+                POLICY BLOCKED (NO KEY USAGE)
               </span>
             )}
           </div>
@@ -524,7 +547,7 @@ export const AiAgentCockpit: React.FC<AiAgentCockpitProps> = ({ overview }) => {
                 <span className="text-xs font-bold text-charcoal-900">AI Tool Call & Strict Schema Defense</span>
               </div>
               <span className="text-[10px] font-mono text-near-dark font-bold">
-                {simulationResult.aiDecision.validationPassed ? 'SCHEMA VALIDATED' : 'SCHEMA REJECTED'}
+                {simulationResult.aiDecision.validationPassed ? 'NEP-0010 VALIDATED' : 'SCHEMA REJECTED'}
               </span>
             </div>
 
@@ -550,25 +573,30 @@ export const AiAgentCockpit: React.FC<AiAgentCockpitProps> = ({ overview }) => {
             )}
           </div>
 
-          {/* STAGE 3: Pre-Flight Invariant Engine (10 Checks) */}
+          {/* STAGE 3: Client-Side Pre-Flight Invariant Evaluation (10 Checks) */}
           <div
             className={`p-4 rounded-2xl border transition-all ${
               currentExecutionStep >= 3 ? 'bg-ivory-warm/60 border-border' : 'opacity-40 border-border/60'
             }`}
           >
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div className="flex items-center gap-2.5">
                 <div className="w-6 h-6 rounded-full bg-near-light text-near-dark font-mono text-xs font-bold flex items-center justify-center">
                   3
                 </div>
-                <span className="text-xs font-bold text-charcoal-900">
-                  Vault Shield Invariant Engine (10 Pre-Flight Checks)
-                </span>
+                <div>
+                  <span className="text-xs font-bold text-charcoal-900 block">
+                    Client-Side Pre-Flight Invariant Evaluation (10 Advisory Checks)
+                  </span>
+                  <span className="text-[10px] text-charcoal-500 font-sans">
+                    Evaluates parameters locally before invoking keys. Contract remains authoritative upon broadcast.
+                  </span>
+                </div>
               </div>
 
               <button
                 onClick={() => setIsPreflightAccordionOpen(!isPreflightAccordionOpen)}
-                className="text-xs text-charcoal-600 hover:text-charcoal-900 flex items-center gap-1 font-mono"
+                className="text-xs text-charcoal-600 hover:text-charcoal-900 flex items-center gap-1 font-mono self-end sm:self-auto"
               >
                 <span>
                   {simulationResult.preflightChecks.filter(c => c.passed).length} / 10 Passed
@@ -599,8 +627,25 @@ export const AiAgentCockpit: React.FC<AiAgentCockpitProps> = ({ overview }) => {
                       ) : (
                         <XCircle className="w-3.5 h-3.5 text-rose-600 shrink-0 mt-0.5" />
                       )}
-                      <div className="min-w-0">
-                        <div className="font-bold text-charcoal-900">{check.name}</div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="font-bold text-charcoal-900 truncate">{check.name}</span>
+                          <span
+                            className={`text-[8px] uppercase px-1.5 py-0.2 rounded font-bold shrink-0 ${
+                              check.evaluationType === 'CLIENT_SYNTAX'
+                                ? 'bg-charcoal-100 text-charcoal-700'
+                                : check.evaluationType === 'CLIENT_PREFLIGHT_LIVE_RPC'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-amber-100 text-amber-800'
+                            }`}
+                          >
+                            {check.evaluationType === 'CLIENT_SYNTAX'
+                              ? 'SYNTAX'
+                              : check.evaluationType === 'CLIENT_PREFLIGHT_LIVE_RPC'
+                              ? 'LIVE RPC'
+                              : 'FIXTURE'}
+                          </span>
+                        </div>
                         <div className="text-[10px] text-charcoal-500 mt-0.5 leading-tight">{check.detail}</div>
                       </div>
                     </div>
@@ -610,7 +655,7 @@ export const AiAgentCockpit: React.FC<AiAgentCockpitProps> = ({ overview }) => {
             </AnimatePresence>
           </div>
 
-          {/* STAGE 4: Contract Routing Determination */}
+          {/* STAGE 4: Predicted Policy Routing */}
           <div
             className={`p-4 rounded-2xl border transition-all ${
               currentExecutionStep >= 4 ? 'bg-ivory-warm/60 border-border' : 'opacity-40 border-border/60'
@@ -621,10 +666,10 @@ export const AiAgentCockpit: React.FC<AiAgentCockpitProps> = ({ overview }) => {
                 <div className="w-6 h-6 rounded-full bg-near-light text-near-dark font-mono text-xs font-bold flex items-center justify-center">
                   4
                 </div>
-                <span className="text-xs font-bold text-charcoal-900">Contract Policy Routing Outcome</span>
+                <span className="text-xs font-bold text-charcoal-900">Predicted Policy Routing (Pre-Flight Estimation)</span>
               </div>
               <span className="text-[10px] font-mono font-bold text-charcoal-500">
-                RULE EVALUATED
+                PREDICTED OUTCOME
               </span>
             </div>
 
@@ -642,12 +687,16 @@ export const AiAgentCockpit: React.FC<AiAgentCockpitProps> = ({ overview }) => {
                 <p className="text-[11px] text-charcoal-600 mt-1 font-sans">
                   {simulationResult.policyExplanation}
                 </p>
+                <div className="mt-1 flex items-center gap-1.5 text-[10px] font-mono text-charcoal-400">
+                  <Info className="w-3 h-3 text-charcoal-400 shrink-0" />
+                  <span>Contract remains authoritative: spending invariants are enforced on-chain upon broadcast.</span>
+                </div>
               </div>
 
               {simulationResult.routing === 'AUTO_DISPATCH' && (
                 <div className="text-right shrink-0">
                   <span className="text-[10px] font-mono font-bold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-300">
-                    Route A: InFlight Transfer
+                    Route A: Auto-Dispatch
                   </span>
                 </div>
               )}
@@ -670,7 +719,7 @@ export const AiAgentCockpit: React.FC<AiAgentCockpitProps> = ({ overview }) => {
             </div>
           </div>
 
-          {/* STAGE 5: Cryptographic Confinement & Dry-Run Preview */}
+          {/* STAGE 5: Function-Call Access Key Payload Preview */}
           <div
             className={`p-4 rounded-2xl border transition-all ${
               currentExecutionStep >= 5 ? 'bg-ivory-warm/60 border-border' : 'opacity-40 border-border/60'
@@ -682,7 +731,7 @@ export const AiAgentCockpit: React.FC<AiAgentCockpitProps> = ({ overview }) => {
                   5
                 </div>
                 <span className="text-xs font-bold text-charcoal-900">
-                  Cryptographic Confinement & Dry-Run Proof
+                  Function-Call Access Key Payload Preview (Zero Deposit)
                 </span>
               </div>
 
@@ -702,7 +751,7 @@ export const AiAgentCockpit: React.FC<AiAgentCockpitProps> = ({ overview }) => {
                 <div className="flex items-center gap-2 text-rose-900 font-mono text-[11px]">
                   <ShieldCheck className="w-4 h-4 text-rose-600 shrink-0" />
                   <span>
-                    Zero transactions signed. Execution safely aborted by preflight invariant engine before invoking signing keys.
+                    Zero transactions signed. Execution safely aborted by client-side preflight evaluation before invoking signing keys.
                   </span>
                 </div>
               ) : (
@@ -710,7 +759,7 @@ export const AiAgentCockpit: React.FC<AiAgentCockpitProps> = ({ overview }) => {
                   <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-charcoal-700">
                     <div className="flex items-center gap-1.5">
                       <Lock className="w-3.5 h-3.5 text-near-dark" />
-                      <span>Method: <code className="font-bold text-near-dark">request_payment()</code></span>
+                      <span>Target Method: <code className="font-bold text-near-dark">request_payment()</code></span>
                     </div>
                     <div>
                       Attached Deposit: <code className="font-bold text-emerald-700">0 yoctoNEAR (Least Privilege)</code>
@@ -719,6 +768,10 @@ export const AiAgentCockpit: React.FC<AiAgentCockpitProps> = ({ overview }) => {
                       Gas Limit: <code className="font-bold text-charcoal-900">30 TGas</code>
                     </div>
                   </div>
+
+                  <p className="text-[11px] text-charcoal-500 font-sans">
+                    <strong>UNBROADCAST PAYLOAD PREVIEW ONLY:</strong> In simulation mode, zero private keys are accessed and zero transactions are signed or broadcast to the blockchain.
+                  </p>
 
                   <AnimatePresence>
                     {isSignerPreviewOpen && simulationResult.signerPreview && (
@@ -798,7 +851,7 @@ export const AiAgentCockpit: React.FC<AiAgentCockpitProps> = ({ overview }) => {
           </div>
         </div>
 
-        {/* Emitted Audit Records Sequence */}
+        {/* Emitted Audit Records Sequence (Audited strictly to #39 & #40) */}
         <div className="p-3.5 rounded-2xl bg-ivory-warm/40 border border-border/70 text-xs font-mono">
           <span className="text-[10px] font-bold uppercase tracking-wider text-charcoal-400 block mb-2">
             CONTRACT AUDIT LOG SEQUENCE (IMMUTABLE LOGS)
@@ -810,6 +863,10 @@ export const AiAgentCockpit: React.FC<AiAgentCockpitProps> = ({ overview }) => {
                 <span>{evt}</span>
               </div>
             ))}
+          </div>
+          <div className="mt-2.5 pt-2 border-t border-border/60 text-[10px] font-sans text-charcoal-500">
+            <span className="font-bold text-charcoal-700">Verification note: </span>
+            {VERIFIED_PHASE2_PROOF.routeNote}
           </div>
         </div>
       </div>
