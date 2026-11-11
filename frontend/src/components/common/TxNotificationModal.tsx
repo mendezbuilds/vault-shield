@@ -45,6 +45,11 @@ export const TxNotificationModal: React.FC = () => {
           <p className="text-sm text-charcoal-900 font-bold">
             {txStatus.message || (isFailed ? 'The transaction was denied by contract policy or rejected.' : '')}
           </p>
+          {isSuccess && (
+            <p className="text-[11px] text-charcoal-600 mt-1">
+              Signed via session key or wallet approval. Execution verified on NEAR Public Testnet.
+            </p>
+          )}
           {txStatus.error && (
             <div className="mt-3 p-3 rounded-xl bg-ivory-warm border border-border text-left overflow-x-auto max-h-36 text-xs font-mono text-rose-700">
               {txStatus.error}

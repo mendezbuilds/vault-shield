@@ -341,10 +341,10 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       return { success: false, error: 'Transaction was cancelled by user before signing' };
     }
 
-    // 5. User confirmed in modal -> proceed to Meteor Wallet extension
+    // 5. User confirmed in modal -> proceed to transaction signing
     setTxStatus({
       state: 'signing',
-      message: `Awaiting signature in Meteor Wallet (${accountId})...`,
+      message: `Authorizing transaction via session key or wallet (${accountId})...`,
     });
 
     try {
@@ -356,11 +356,18 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           staged.gasUnits
         );
 
+        if (!hash || typeof hash !== 'string' || hash.trim().length === 0) {
+          throw new Error('Transaction execution completed without a verified transaction hash');
+        }
+
         setTxStatus({
           state: 'confirmed',
-          message: 'Transaction successfully executed on NEAR Testnet!',
+          message: 'Transaction successfully verified on NEAR Testnet!',
           txHash: hash,
         });
+
+        // Invalidate in-memory RPC cache so dashboard queries fresh on-chain data
+        nearRpc.clearCache();
 
         if (accountId) {
           fetchBalanceForAccount(accountId).catch(console.warn);
@@ -440,11 +447,18 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
       const hash = await nearWallet.transferNear(receiverId, yoctoAmount);
 
+      if (!hash || typeof hash !== 'string' || hash.trim().length === 0) {
+        throw new Error('Native transfer completed without a verified transaction hash');
+      }
+
       setTxStatus({
         state: 'confirmed',
-        message: 'Native transfer successfully executed on NEAR Testnet!',
+        message: 'Native transfer successfully verified on NEAR Testnet!',
         txHash: hash,
       });
+
+      // Invalidate in-memory RPC cache so dashboard queries fresh on-chain data
+      nearRpc.clearCache();
 
       if (accountId) {
         fetchBalanceForAccount(accountId).catch(console.warn);

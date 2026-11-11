@@ -21,7 +21,7 @@ export const TxStagingModal: React.FC<TxStagingModalProps> = ({
       isOpen={true}
       onClose={onCancel}
       title="Review Staged Owner Transaction"
-      description="Inspect the exact transaction payload before sending it to Meteor Wallet for cryptographic signature."
+      description="Inspect the exact transaction payload before authorizing cryptographic signature."
       maxWidth="md"
     >
       <div className="space-y-4 py-1 text-sm font-sans">
@@ -33,8 +33,21 @@ export const TxStagingModal: React.FC<TxStagingModalProps> = ({
               Owner-Authorized Transaction Gate
             </span>
             <span className="text-charcoal-600">
-              This action requires cryptographic signing by the vault owner account via Meteor Wallet.
+              This action requires cryptographic signing by the vault owner account ({stagedTx.signerId}).
               Verify all parameters below before approving.
+            </span>
+          </div>
+        </div>
+
+        {/* Function-Call Session Key Signing Notice */}
+        <div className="rounded-2xl bg-near-light/40 border border-near-green/30 p-3.5 flex items-start gap-3">
+          <CheckCircle2 className="w-5 h-5 text-near-dark shrink-0 mt-0.5" />
+          <div className="min-w-0 flex-1 text-xs">
+            <span className="font-bold text-near-dark block mb-0.5">
+              Instant Session Key Execution
+            </span>
+            <span className="text-charcoal-700 leading-relaxed">
+              Meteor may sign authorized transactions instantly using your session Function-Call key. An extension popup is not always required. Once execution is verified, you can view the transaction on NEAR Explorer.
             </span>
           </div>
         </div>
@@ -124,7 +137,7 @@ export const TxStagingModal: React.FC<TxStagingModalProps> = ({
             onClick={onConfirm}
             className="px-5 py-2.5 rounded-xl bg-near-dark hover:bg-near-green text-white text-xs font-bold shadow-soft flex items-center gap-2 transition-all"
           >
-            <span>Proceed to Wallet Approval</span>
+            <span>Confirm & Authorize Transaction</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </button>
         </div>

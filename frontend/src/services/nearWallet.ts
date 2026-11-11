@@ -6,6 +6,7 @@ import {
   MAX_PROTOCOL_GAS,
   DEFAULT_METHOD_GAS
 } from '../types/contract';
+import { nearRpc } from './nearRpc';
 
 export type SupportedWalletId = 'my-near-wallet' | 'meteor-wallet';
 
@@ -96,15 +97,127 @@ class NearWalletService {
   }
 
   /**
+   * Authoritatively extracts the transaction hash and verifies execution outcome.
+   * Throws an explicit error if:
+   * 1. Status indicates Failure (top-level or inside receipts).
+   * 2. Transaction hash is missing or uninterpretable.
+   * 3. Authoritative RPC check reports Failure.
+   */
+  public async verifyAndExtractTxHash(
+    outcome: any,
+    signerId: string
+  ): Promise<string> {
+    if (!outcome) {
+      throw new Error('Wallet provider returned an empty transaction outcome');
+    }
+
+    const single = Array.isArray(outcome) ? outcome[0] : outcome;
+    if (!single) {
+      throw new Error('Wallet provider returned an empty outcome array');
+    }
+
+    // 1. Extract transaction hash from supported response formats
+    let candidateHash: string | null = null;
+    if (typeof single === 'string' && single.trim().length > 0) {
+      candidateHash = single.trim();
+    } else if (typeof single === 'object') {
+      if (typeof single.transaction?.hash === 'string' && single.transaction.hash.trim().length > 0) {
+        candidateHash = single.transaction.hash.trim();
+      } else if (typeof single.transaction_outcome?.id === 'string' && single.transaction_outcome.id.trim().length > 0) {
+        candidateHash = single.transaction_outcome.id.trim();
+      } else if (typeof single.transactionHashes === 'string' && single.transactionHashes.trim().length > 0) {
+        candidateHash = single.transactionHashes.split(',')[0].trim();
+      } else if (typeof single.hash === 'string' && single.hash.trim().length > 0) {
+        candidateHash = single.hash.trim();
+      }
+    }
+
+    if (!candidateHash) {
+      throw new Error(
+        'Unable to extract a valid transaction hash from wallet response: ' +
+          (typeof single === 'object' ? JSON.stringify(single) : String(single))
+      );
+    }
+
+    // Helper to format failure messages
+    const parseFailureReason = (failure: any): string => {
+      if (!failure) return 'Transaction execution failed on NEAR Protocol';
+      if (typeof failure === 'string') return failure;
+      const kind = failure.ActionError?.kind || failure.kind;
+      if (kind?.FunctionCallError?.ExecutionError) {
+        return `Execution Error: ${kind.FunctionCallError.ExecutionError}`;
+      }
+      if (kind && typeof kind === 'object') {
+        const primary = Object.keys(kind)[0];
+        if (typeof kind[primary] === 'object' && kind[primary] !== null) {
+          const secondary = Object.keys(kind[primary])[0];
+          const val = kind[primary][secondary];
+          if (val) return `${primary}: ${secondary} - ${typeof val === 'object' ? JSON.stringify(val) : val}`;
+          return `${primary}: ${secondary}`;
+        }
+        return primary;
+      }
+      return JSON.stringify(failure);
+    };
+
+    // 2. Direct inspection of returned execution outcome (FinalExecutionOutcome)
+    if (typeof single === 'object') {
+      if (single.status?.Failure) {
+        throw new Error(parseFailureReason(single.status.Failure));
+      }
+      if (Array.isArray(single.receipts_outcome)) {
+        for (const receipt of single.receipts_outcome) {
+          if (receipt?.outcome?.status?.Failure) {
+            throw new Error(parseFailureReason(receipt.outcome.status.Failure));
+          }
+        }
+      }
+    }
+
+    // 3. If execution status was not included directly in the response (e.g. extension redirect/hashes string),
+    // verify authoritatively via NEAR Testnet RPC
+    const hasExecutionStatus =
+      typeof single === 'object' &&
+      (single.status?.SuccessValue !== undefined || single.status?.SuccessReceiptId !== undefined);
+
+    if (!hasExecutionStatus) {
+      try {
+        const rpcTx = await nearRpc.getTransactionStatus(candidateHash, signerId);
+        if (rpcTx) {
+          if (rpcTx.status?.Failure) {
+            throw new Error(parseFailureReason(rpcTx.status.Failure));
+          }
+          if (Array.isArray(rpcTx.receipts_outcome)) {
+            for (const receipt of rpcTx.receipts_outcome) {
+              if (receipt?.outcome?.status?.Failure) {
+                throw new Error(parseFailureReason(receipt.outcome.status.Failure));
+              }
+            }
+          }
+        }
+      } catch (err: any) {
+        // If RPC verification detected an authoritative on-chain failure, throw immediately!
+        if (err?.message && (err.message.includes('Execution Error') || err.message.includes('ActionError'))) {
+          throw err;
+        }
+        console.warn('[nearWallet] RPC transaction status verification notice:', err?.message);
+      }
+    }
+
+    return candidateHash;
+  }
+
+  /**
    * Signs and broadcasts an owner-authorized FunctionCall transaction.
    * Validates gas against NEAR protocol limits (max 300 Tgas) and attaches exact deposit.
+   * Returns verified transaction hash or throws an explicit verification error.
    */
   public async signAndSendTransaction(
     methodName: string,
     args: Record<string, any>,
     deposit: string = '0',
     gas?: string
-  ): Promise<string | null> {
+  ): Promise<string> {
     if (!this.selector) await this.init();
     if (!this.selector) throw new Error('Wallet selector not initialized');
 
@@ -149,16 +262,7 @@ class NearWalletService {
         ],
       });
 
-      const single = Array.isArray(outcome) ? outcome[0] : outcome;
-      if (single && typeof single === 'object') {
-        if ('transaction' in single && (single as any).transaction?.hash) {
-          return (single as any).transaction.hash;
-        }
-        if ('transaction_outcome' in single && (single as any).transaction_outcome?.id) {
-          return (single as any).transaction_outcome.id;
-        }
-      }
-      return null;
+      return await this.verifyAndExtractTxHash(outcome, active.accountId);
     } catch (err: any) {
       console.warn(`[nearWallet] Transaction execution failed:`, err);
       // Re-throw with user-friendly error message
@@ -172,11 +276,12 @@ class NearWalletService {
 
   /**
    * Executes a native NEAR token transfer using actionCreators.transfer (no contract function call).
+   * Returns verified transaction hash or throws an explicit verification error.
    */
   public async transferNear(
     receiverId: string,
     yoctoAmount: string
-  ): Promise<string | null> {
+  ): Promise<string> {
     if (!this.selector) await this.init();
     if (!this.selector) throw new Error('Wallet selector not initialized');
 
@@ -186,24 +291,24 @@ class NearWalletService {
 
     const walletId = state.selectedWalletId;
     const wallet = await (walletId ? this.selector.wallet(walletId) : this.selector.wallet());
-    const outcome = await wallet.signAndSendTransaction({
-      signerId: active.accountId,
-      receiverId,
-      actions: [
-        actionCreators.transfer(BigInt(yoctoAmount)),
-      ],
-    });
+    try {
+      const outcome = await wallet.signAndSendTransaction({
+        signerId: active.accountId,
+        receiverId,
+        actions: [
+          actionCreators.transfer(BigInt(yoctoAmount)),
+        ],
+      });
 
-    const single = Array.isArray(outcome) ? outcome[0] : outcome;
-    if (single && typeof single === 'object') {
-      if ('transaction' in single && (single as any).transaction?.hash) {
-        return (single as any).transaction.hash;
+      return await this.verifyAndExtractTxHash(outcome, active.accountId);
+    } catch (err: any) {
+      console.warn(`[nearWallet] Transfer execution failed:`, err);
+      const msg = err?.message || String(err);
+      if (msg.includes('User rejected') || msg.includes('USER_CANCELLED')) {
+        throw new Error('Transaction was cancelled by user in wallet');
       }
-      if ('transaction_outcome' in single && (single as any).transaction_outcome?.id) {
-        return (single as any).transaction_outcome.id;
-      }
+      throw err;
     }
-    return null;
   }
 }
 

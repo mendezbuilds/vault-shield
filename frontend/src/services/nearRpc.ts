@@ -139,20 +139,45 @@ class NearRpcClient {
     }
   }
 
+  /**
+   * Queries the authoritative execution outcome of a transaction from NEAR JSON-RPC.
+   */
+  public async getTransactionStatus(txHash: string, accountId: string): Promise<any> {
+    try {
+      return await this.callRpc('tx', [txHash, accountId]);
+    } catch (err: any) {
+      console.warn(`[nearRpc] getTransactionStatus error for ${txHash}:`, err?.message);
+      return null;
+    }
+  }
+
   private cachedOverview: VaultAccountOverview | null = null;
   private lastFetchedTime: number = 0;
   private inflightOverviewPromise: Promise<VaultAccountOverview> | null = null;
 
   /**
-   * Fetches all core vault parameters with caching and in-flight de-duplication.
-   * Gracefully handles uncreated or uninitialized contract states without crashing.
+   * Clears the in-memory vault overview cache and in-flight promise.
+   * Ensures subsequent calls fetch fresh on-chain data immediately.
    */
-  public async fetchVaultOverview(): Promise<VaultAccountOverview> {
+  public clearCache(): void {
+    this.cachedOverview = null;
+    this.lastFetchedTime = 0;
+    this.inflightOverviewPromise = null;
+  }
+
+  /**
+   * Fetches all core vault parameters with caching and in-flight de-duplication.
+   * Passing forceRefresh = true invalidates the cache and queries fresh RPC state.
+   */
+  public async fetchVaultOverview(forceRefresh: boolean = false): Promise<VaultAccountOverview> {
     const now = Date.now();
-    if (this.cachedOverview && now - this.lastFetchedTime < 6000) {
+    if (!forceRefresh && this.cachedOverview && now - this.lastFetchedTime < 6000) {
       return this.cachedOverview;
     }
-    if (this.inflightOverviewPromise) {
+
+    if (forceRefresh) {
+      this.clearCache();
+    } else if (this.inflightOverviewPromise) {
       return this.inflightOverviewPromise;
     }
 

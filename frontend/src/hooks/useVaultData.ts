@@ -8,9 +8,9 @@ export function useVaultData(pollIntervalMs: number = 15000) {
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<number>(Date.now());
 
-  const fetchOverview = useCallback(async () => {
+  const fetchOverview = useCallback(async (forceRefresh: boolean = false) => {
     try {
-      const overview = await nearRpc.fetchVaultOverview();
+      const overview = await nearRpc.fetchVaultOverview(forceRefresh);
       setData(overview);
       setError(null);
       setLastUpdated(Date.now());
@@ -23,8 +23,8 @@ export function useVaultData(pollIntervalMs: number = 15000) {
   }, []);
 
   useEffect(() => {
-    fetchOverview();
-    const interval = setInterval(fetchOverview, pollIntervalMs);
+    fetchOverview(false);
+    const interval = setInterval(() => fetchOverview(false), pollIntervalMs);
     return () => clearInterval(interval);
   }, [fetchOverview, pollIntervalMs]);
 
@@ -33,7 +33,7 @@ export function useVaultData(pollIntervalMs: number = 15000) {
     loading,
     error,
     lastUpdated,
-    refresh: fetchOverview,
+    refresh: () => fetchOverview(true),
   };
 }
 
