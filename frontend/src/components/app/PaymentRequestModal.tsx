@@ -140,10 +140,25 @@ export const PaymentRequestModal: React.FC<PaymentRequestModalProps> = ({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Submit Agent Payment Request"
-      description={`Dispatches request_payment() directly to ${overview?.contractId || VAULT_CONTRACT_ID}.`}
+      title="Owner Manual Dispatch (Administrative)"
+      description={`Dispatches request_payment() from connected owner wallet to ${overview?.contractId || VAULT_CONTRACT_ID}. For autonomous agent signing, use Live Agent Execution.`}
     >
       <form onSubmit={handleSubmit} className="space-y-4">
+        {/* DISTINCTION NOTICE */}
+        <div className="p-3 rounded-xl bg-near-light/50 border border-near-green/40 text-[11px] text-near-dark flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 font-sans">
+          <div className="flex items-center gap-2">
+            <Bot className="w-4 h-4 text-near-dark shrink-0" />
+            <span>Autonomous agent execution uses <code className="font-mono font-bold">agent.cleartoad8704.testnet</code> without owner signing.</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => onClose()}
+            className="px-2.5 py-1 rounded-lg bg-near-dark text-white font-bold text-[10px] hover:bg-near-green transition-all shrink-0"
+          >
+            Switch to Live Agent Tab &rarr;
+          </button>
+        </div>
+
         {/* SIGNER IDENTIFICATION & ROLE STRIP */}
         <div className="p-3.5 rounded-2xl bg-ivory-warm border border-border text-xs space-y-2 font-mono">
           <div className="flex items-center justify-between">

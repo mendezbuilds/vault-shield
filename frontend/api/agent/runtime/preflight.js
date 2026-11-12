@@ -1,0 +1,444 @@
+import { MIN_TTL_NANOS, MAX_TTL_NANOS, DEFAULT_TTL_NANOS, MAX_GLOBAL_PENDING, MAX_AGENT_PENDING, } from './types.js';
+import { DEFAULT_RPC_TIMEOUT_MS } from './config.js';
+/**
+ * Standard RPC-based contract view provider using JSON-RPC query:call_function.
+ * Enforces configurable bounded timeouts and fail-closed error handling.
+ */
+export class NearRpcContractViewProvider {
+    rpcUrl;
+    fallbackRpcUrl;
+    contractId;
+    timeoutMs;
+    constructor(rpcUrl, fallbackRpcUrl, contractId, timeoutMs = DEFAULT_RPC_TIMEOUT_MS) {
+        this.rpcUrl = rpcUrl;
+        this.fallbackRpcUrl = fallbackRpcUrl;
+        this.contractId = contractId;
+        this.timeoutMs = timeoutMs;
+    }
+    async callViewMethod(methodName, args = {}) {
+        const urls = [this.rpcUrl, this.fallbackRpcUrl];
+        let lastError = null;
+        for (const url of urls) {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(new Error(`RPC view call timeout after ${this.timeoutMs}ms`)), this.timeoutMs);
+            try {
+                const res = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        jsonrpc: '2.0',
+                        id: `view_${methodName}_${Date.now()}`,
+                        method: 'query',
+                        params: {
+                            request_type: 'call_function',
+                            finality: 'optimistic',
+                            account_id: this.contractId,
+                            method_name: methodName,
+                            args_base64: Buffer.from(JSON.stringify(args)).toString('base64'),
+                        },
+                    }),
+                    signal: controller.signal,
+                });
+                if (!res.ok) {
+                    throw new Error(`HTTP error ${res.status}: ${res.statusText}`);
+                }
+                const data = await res.json();
+                if (data.error) {
+                    throw new Error(`RPC error: ${JSON.stringify(data.error)}`);
+                }
+                if (!data.result || !data.result.result) {
+                    throw new Error(`Invalid view response format from ${url}`);
+                }
+                let rawBytes;
+                try {
+                    rawBytes = Buffer.from(data.result.result);
+                }
+                catch {
+                    throw new Error(`Malformed RPC view response: invalid base64 result from ${url}`);
+                }
+                let parsed;
+                try {
+                    parsed = JSON.parse(rawBytes.toString('utf8'));
+                }
+                catch {
+                    throw new Error(`Malformed RPC view response: invalid JSON payload from ${url}`);
+                }
+                return parsed;
+            }
+            catch (err) {
+                lastError = err;
+                continue;
+            }
+            finally {
+                clearTimeout(timer);
+            }
+        }
+        throw new Error(`Failed to call view method ${methodName} across all RPCs: ${lastError?.message}`);
+    }
+    async isPaused() {
+        return this.callViewMethod('is_paused');
+    }
+    async isAgentAuthorized(agentId) {
+        return this.callViewMethod('is_agent_authorized', { agent_id: agentId });
+    }
+    async getPolicy() {
+        return this.callViewMethod('get_policy');
+    }
+    async getDailyBucket(dayIndex) {
+        return this.callViewMethod('get_daily_bucket', dayIndex !== undefined ? { day_index: dayIndex } : {});
+    }
+    async getAvailableLiquidBalance() {
+        return this.callViewMethod('get_available_liquid_balance');
+    }
+    async getAgentPendingCount(agentId) {
+        return this.callViewMethod('get_agent_pending_count', { agent_id: agentId });
+    }
+    async getGlobalPendingCount() {
+        return this.callViewMethod('get_global_pending_count');
+    }
+    async getOwner() {
+        return this.callViewMethod('get_owner');
+    }
+    async getRequest(requestId) {
+        return this.callViewMethod('get_request', { request_id: requestId });
+    }
+    async getTombstone(requestId) {
+        return this.callViewMethod('get_tombstone', { request_id: requestId });
+    }
+    async getTransactionStatus(txHash, signerAccountId) {
+        const urls = [this.rpcUrl, this.fallbackRpcUrl];
+        let lastError = null;
+        for (const url of urls) {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(new Error(`RPC tx query timeout after ${this.timeoutMs}ms`)), this.timeoutMs);
+            try {
+                const res = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        jsonrpc: '2.0',
+                        id: `tx_${Date.now()}`,
+                        method: 'tx',
+                        params: [txHash, signerAccountId],
+                    }),
+                    signal: controller.signal,
+                });
+                if (!res.ok) {
+                    throw new Error(`HTTP error ${res.status}: ${res.statusText}`);
+                }
+                const data = await res.json();
+                if (data.error) {
+                    const errStr = JSON.stringify(data.error);
+                    if (errStr.includes('UnknownTransaction') || (errStr.includes('Transaction') && errStr.includes("doesn't exist"))) {
+                        return null;
+                    }
+                    throw new Error(`RPC error: ${errStr}`);
+                }
+                return data.result || null;
+            }
+            catch (err) {
+                lastError = err;
+                continue;
+            }
+            finally {
+                clearTimeout(timer);
+            }
+        }
+        throw new Error(`Failed to query transaction status for ${txHash}: ${lastError?.message}`);
+    }
+}
+/**
+ * Validates NEAR account ID syntax according to NEP-0010.
+ */
+export function isValidNearAccountId(accountId) {
+    if (!accountId || accountId.length < 2 || accountId.length > 64)
+        return false;
+    // Regex: lowercase alphanumeric, hyphens, underscores, dots
+    const nearAccountRegex = /^(([a-z0-9_-]+)\.)*[a-z0-9_-]+$/;
+    return nearAccountRegex.test(accountId);
+}
+/**
+ * Executes a comprehensive, read-only pre-flight advisory check against the live vault contract.
+ * Fails closed if any invariant check fails or if RPC state cannot be retrieved.
+ */
+export async function executePreflight(intent, config, viewProvider) {
+    const checks = [];
+    const provider = viewProvider || new NearRpcContractViewProvider(config.rpcUrl, config.fallbackRpcUrl, config.vaultContractId, config.rpcTimeoutMs);
+    // 1. Destination Syntax Check
+    const validDest = isValidNearAccountId(intent.destination);
+    checks.push({
+        check: 'Valid Destination Account ID',
+        passed: validDest,
+        detail: validDest ? `Valid NEAR account syntax (${intent.destination})` : `Invalid NEAR account ID: "${intent.destination}"`,
+    });
+    if (!validDest) {
+        return {
+            success: false,
+            checks,
+            predictedRouting: 'DENIED',
+            error: `Invalid destination account ID: ${intent.destination}`,
+        };
+    }
+    // 2. Amount Validation Check
+    let amountYoctoBn;
+    try {
+        amountYoctoBn = BigInt(intent.amountYocto);
+        const positive = amountYoctoBn > 0n;
+        checks.push({
+            check: 'Positive Transfer Amount',
+            passed: positive,
+            detail: positive ? `${intent.amountNear} NEAR (${intent.amountYocto} yocto)` : 'Amount must be greater than zero',
+        });
+        if (!positive) {
+            return {
+                success: false,
+                checks,
+                predictedRouting: 'DENIED',
+                error: 'Amount must be greater than zero yoctoNEAR',
+            };
+        }
+    }
+    catch (err) {
+        checks.push({
+            check: 'Amount Parse Validity',
+            passed: false,
+            detail: `Failed to parse yoctoNEAR amount: ${err?.message}`,
+        });
+        return {
+            success: false,
+            checks,
+            predictedRouting: 'DENIED',
+            error: `Failed to parse yoctoNEAR amount: ${err?.message}`,
+        };
+    }
+    // 3. TTL Bounds Check
+    const ttlNanos = intent.ttlSeconds ? intent.ttlSeconds * 1_000_000_000 : DEFAULT_TTL_NANOS;
+    const ttlValid = ttlNanos >= MIN_TTL_NANOS && ttlNanos <= MAX_TTL_NANOS;
+    checks.push({
+        check: 'TTL Range Compliance',
+        passed: ttlValid,
+        detail: ttlValid
+            ? `${ttlNanos / 1_000_000_000}s (within 300s - 86400s bounds)`
+            : `TTL ${ttlNanos / 1_000_000_000}s out of bounds (min 300s, max 86400s)`,
+    });
+    if (!ttlValid) {
+        return {
+            success: false,
+            checks,
+            predictedRouting: 'DENIED',
+            predictedReason: 'InvalidTtl',
+            error: 'Requested TTL is outside contract permissible bounds (5 min - 24 hours)',
+        };
+    }
+    // Retrieve on-chain contract state snapshots
+    let isPaused;
+    let isAuthorized;
+    let policy;
+    let bucket;
+    let liquidBalanceYocto;
+    let agentPendingCount;
+    let globalPendingCount;
+    try {
+        const [pausedRes, authRes, policyRes, bucketRes, liquidRes, agentPendRes, globalPendRes, ownerRes] = await Promise.all([
+            provider.isPaused(),
+            provider.isAgentAuthorized(config.agentAccountId),
+            provider.getPolicy(),
+            provider.getDailyBucket(),
+            provider.getAvailableLiquidBalance(),
+            provider.getAgentPendingCount(config.agentAccountId),
+            provider.getGlobalPendingCount(),
+            provider.getOwner ? provider.getOwner().catch(() => null) : Promise.resolve(null),
+        ]);
+        isPaused = pausedRes;
+        isAuthorized = authRes || (Boolean(ownerRes) && config.agentAccountId === ownerRes);
+        policy = policyRes;
+        bucket = bucketRes;
+        liquidBalanceYocto = liquidRes;
+        agentPendingCount = agentPendRes;
+        globalPendingCount = globalPendRes;
+    }
+    catch (err) {
+        checks.push({
+            check: 'On-Chain RPC State Retrieval',
+            passed: false,
+            detail: `Fail-closed: could not query contract state via RPC: ${err?.message}`,
+        });
+        return {
+            success: false,
+            checks,
+            predictedRouting: 'DENIED',
+            error: `Contract view query failed (fail-closed): ${err?.message}`,
+        };
+    }
+    // 4. Agent Authorization Check
+    checks.push({
+        check: 'Agent Authorization Status',
+        passed: isAuthorized,
+        detail: isAuthorized
+            ? `Agent ${config.agentAccountId} is actively registered in authorized_agents`
+            : `Agent ${config.agentAccountId} is NOT authorized on contract ${config.vaultContractId}`,
+    });
+    if (!isAuthorized) {
+        return {
+            success: false,
+            checks,
+            predictedRouting: 'DENIED',
+            predictedReason: 'AgentNotAuthorized',
+            error: `Signer ${config.agentAccountId} is not an authorized agent in contract policy`,
+        };
+    }
+    // 5. Vault Pause Check
+    const notPaused = !isPaused && !policy.is_paused;
+    checks.push({
+        check: 'Vault Emergency Pause Status',
+        passed: notPaused,
+        detail: notPaused ? 'Vault is active (unpaused)' : 'Vault is currently PAUSED',
+    });
+    if (!notPaused) {
+        return {
+            success: false,
+            checks,
+            predictedRouting: 'DENIED',
+            predictedReason: 'VaultPaused',
+            error: 'Vault is paused by owner; all agent spending is halted',
+        };
+    }
+    // 6. Per-Transaction Cap Check
+    const maxPerTxBn = BigInt(policy.max_per_transaction);
+    const underPerTxCap = amountYoctoBn <= maxPerTxBn;
+    checks.push({
+        check: 'Per-Transaction Cap Compliance',
+        passed: underPerTxCap,
+        detail: underPerTxCap
+            ? `Amount <= Max Per Tx (${policy.max_per_transaction} yocto)`
+            : `Amount exceeds Max Per Tx limit (${policy.max_per_transaction} yocto)`,
+    });
+    if (!underPerTxCap) {
+        return {
+            success: false,
+            checks,
+            predictedRouting: 'DENIED',
+            predictedReason: 'ExceedsPerTransactionCap',
+            error: `Amount exceeds maximum per-transaction policy cap (${policy.max_per_transaction} yoctoNEAR)`,
+        };
+    }
+    // 7. Daily Cap & Bucket Spend Check
+    const dailyCapBn = BigInt(policy.daily_cap);
+    const spentBn = BigInt(bucket.spent || '0');
+    const reservedBn = BigInt(bucket.reserved || '0');
+    const totalCommitmentBn = spentBn + reservedBn + amountYoctoBn;
+    const underDailyCap = totalCommitmentBn <= dailyCapBn;
+    checks.push({
+        check: 'Daily Cap & Budget Compliance',
+        passed: underDailyCap,
+        detail: underDailyCap
+            ? `Total commitment (${totalCommitmentBn.toString()} yocto) <= Daily Cap (${policy.daily_cap} yocto)`
+            : `Total commitment (${totalCommitmentBn.toString()} yocto) breaches Daily Cap (${policy.daily_cap} yocto). Current spent: ${bucket.spent}, reserved: ${bucket.reserved}`,
+    });
+    if (!underDailyCap) {
+        return {
+            success: false,
+            checks,
+            predictedRouting: 'DENIED',
+            predictedReason: 'ExceedsDailyCap',
+            error: `Daily spending budget exceeded (Cap: ${policy.daily_cap}, Spent+Reserved: ${(spentBn + reservedBn).toString()} yoctoNEAR)`,
+        };
+    }
+    // 8. Available Liquid Balance Check
+    const liquidBn = BigInt(liquidBalanceYocto);
+    const sufficientLiquid = amountYoctoBn <= liquidBn;
+    checks.push({
+        check: 'Available Liquid Balance Solvency',
+        passed: sufficientLiquid,
+        detail: sufficientLiquid
+            ? `Amount <= Available Liquid (${liquidBalanceYocto} yocto)`
+            : `Insufficient liquid funds (${liquidBalanceYocto} yocto available, ${amountYoctoBn.toString()} requested)`,
+    });
+    if (!sufficientLiquid) {
+        return {
+            success: false,
+            checks,
+            predictedRouting: 'DENIED',
+            predictedReason: 'InsufficientLiquidBalance',
+            error: `Vault has insufficient liquid balance (${liquidBalanceYocto} yoctoNEAR available)`,
+        };
+    }
+    // 9. Queue Limits Check
+    const underAgentQueue = agentPendingCount < MAX_AGENT_PENDING;
+    checks.push({
+        check: 'Agent Pending Queue Quota',
+        passed: underAgentQueue,
+        detail: underAgentQueue
+            ? `Agent pending requests: ${agentPendingCount} / ${MAX_AGENT_PENDING} slots`
+            : `Agent pending limit reached (${agentPendingCount} / ${MAX_AGENT_PENDING})`,
+    });
+    const underGlobalQueue = globalPendingCount < MAX_GLOBAL_PENDING;
+    checks.push({
+        check: 'Global Pending Queue Capacity',
+        passed: underGlobalQueue,
+        detail: underGlobalQueue
+            ? `Global pending requests: ${globalPendingCount} / ${MAX_GLOBAL_PENDING} slots`
+            : `Global pending limit reached (${globalPendingCount} / ${MAX_GLOBAL_PENDING})`,
+    });
+    // 10. Routing Prediction
+    const isAllowlisted = policy.destination_allowlist.includes(intent.destination);
+    const autoThresholdBn = BigInt(policy.auto_approval_threshold);
+    const belowThreshold = amountYoctoBn <= autoThresholdBn;
+    let predictedRouting;
+    let predictedReason;
+    if (isAllowlisted && belowThreshold) {
+        predictedRouting = 'AUTO_DISPATCH';
+        predictedReason = 'None';
+    }
+    else {
+        // If it requires approval, check queue limits
+        if (!underGlobalQueue) {
+            return {
+                success: false,
+                checks,
+                predictedRouting: 'DENIED',
+                predictedReason: 'GlobalQueueLimitExceeded',
+                error: 'Global vault pending approval queue is completely full (32/32)',
+            };
+        }
+        if (!underAgentQueue) {
+            return {
+                success: false,
+                checks,
+                predictedRouting: 'DENIED',
+                predictedReason: 'AgentQueueLimitExceeded',
+                error: `Agent concurrency ceiling reached (${agentPendingCount}/${MAX_AGENT_PENDING} pending requests awaiting owner approval)`,
+            };
+        }
+        predictedRouting = 'PENDING_APPROVAL';
+        if (!isAllowlisted && !belowThreshold) {
+            predictedReason = 'AboveThresholdAndNewDestination';
+        }
+        else if (!isAllowlisted) {
+            predictedReason = 'NewDestinationOnly';
+        }
+        else {
+            predictedReason = 'AboveThresholdOnly';
+        }
+    }
+    return {
+        success: true,
+        checks,
+        predictedRouting,
+        predictedReason,
+        vaultState: {
+            isPaused,
+            isAgentAuthorized: isAuthorized,
+            availableLiquidYocto: liquidBalanceYocto,
+            agentPendingCount,
+            globalPendingCount,
+            dailySpentYocto: bucket.spent,
+            dailyReservedYocto: bucket.reserved,
+            dailyCapYocto: policy.daily_cap,
+            maxPerTxYocto: policy.max_per_transaction,
+            autoApprovalThresholdYocto: policy.auto_approval_threshold,
+            isDestinationAllowlisted: isAllowlisted,
+        },
+    };
+}
+//# sourceMappingURL=preflight.js.map

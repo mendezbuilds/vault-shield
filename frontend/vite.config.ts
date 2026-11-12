@@ -1,6 +1,9 @@
 import react from '@vitejs/plugin-react';
 import { exec } from 'child_process';
 import { defineConfig, Plugin } from 'vite';
+import preflightHandler from './api/agent/preflight.ts';
+import executeHandler from './api/agent/execute.ts';
+import statusHandler from './api/agent/status.ts';
 
 function nearTxBridgePlugin(): Plugin {
   // In-memory RPC response cache (TTL 3.5s) to eliminate duplicate burst queries
@@ -173,6 +176,19 @@ function nearTxBridgePlugin(): Plugin {
             res.end(JSON.stringify({ error: err?.message || 'Internal error' }));
           }
         });
+      });
+
+      // Live Autonomous Agent Runtime Endpoints
+      server.middlewares.use('/api/agent/preflight', (req, res) => {
+        preflightHandler(req, res);
+      });
+
+      server.middlewares.use('/api/agent/execute', (req, res) => {
+        executeHandler(req, res);
+      });
+
+      server.middlewares.use('/api/agent/status', (req, res) => {
+        statusHandler(req, res);
       });
     }
   };

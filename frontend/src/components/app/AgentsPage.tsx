@@ -6,6 +6,7 @@ import { useWallet } from '../../context/WalletContext';
 import { nearRpc } from '../../services/nearRpc';
 import { getExplorerAccountUrl } from '../../utils/formatters';
 import { AiAgentCockpit } from './AiAgentCockpit';
+import { LiveAgentExecutionSection } from './LiveAgentExecutionSection';
 import {
   Bot,
   UserPlus,
@@ -24,6 +25,7 @@ import {
   Key,
   Coins,
   Shield,
+  Zap,
 } from 'lucide-react';
 
 interface AgentsPageProps {
@@ -46,12 +48,13 @@ export const AgentsPage: React.FC<AgentsPageProps> = ({
     isConnected,
   } = useWallet();
 
-  const [activeTab, setActiveTab] = useState<'cockpit' | 'directory'>(() => {
+  const [activeTab, setActiveTab] = useState<'live' | 'cockpit' | 'directory'>(() => {
     if (typeof window !== 'undefined') {
       const hash = window.location.hash.toLowerCase();
       if (hash.includes('cockpit')) return 'cockpit';
+      if (hash.includes('directory')) return 'directory';
     }
-    return 'directory';
+    return 'live';
   });
   const [isAddAgentModalOpen, setIsAddAgentModalOpen] = useState(false);
   const [newAgentId, setNewAgentId] = useState('');
@@ -190,12 +193,20 @@ export const AgentsPage: React.FC<AgentsPageProps> = ({
 
         {/* Action Controls */}
         <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          <button
+            onClick={() => setActiveTab('live')}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-near-dark hover:bg-near-green text-white text-xs font-bold shadow-soft transition-all active:scale-[0.98] touch-manipulation"
+          >
+            <Zap className="w-4 h-4 text-near-green" />
+            <span>Live Agent Execution</span>
+          </button>
+
           {isOwner && (
             <button
               onClick={() => setIsAddAgentModalOpen(true)}
-              className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-near-dark hover:bg-near-green text-white text-xs font-bold shadow-soft transition-all active:scale-[0.98] touch-manipulation"
+              className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-surface-white hover:bg-ivory-warm text-charcoal-800 border border-border text-xs font-bold shadow-soft transition-all touch-manipulation"
             >
-              <UserPlus className="w-4 h-4 text-white" />
+              <UserPlus className="w-4 h-4 text-near-dark" />
               <span>Register New Agent</span>
             </button>
           )}
@@ -204,14 +215,33 @@ export const AgentsPage: React.FC<AgentsPageProps> = ({
             onClick={onOpenPaymentModal}
             className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-surface-white hover:bg-ivory-warm text-charcoal-800 border border-border text-xs font-bold shadow-soft transition-all touch-manipulation"
           >
-            <PlusCircle className="w-4 h-4 text-near-dark" />
-            <span>Simulate Agent Payment</span>
+            <PlusCircle className="w-4 h-4 text-charcoal-600" />
+            <span>Owner Dispatch</span>
           </button>
         </div>
       </div>
 
       {/* 2. SUB-VIEW SELECTOR TABS */}
-      <div className="flex items-center gap-2 border-b border-border/70 pb-2">
+      <div className="flex flex-wrap items-center gap-2 border-b border-border/70 pb-2">
+        <button
+          onClick={() => setActiveTab('live')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs font-extrabold transition-all ${
+            activeTab === 'live'
+              ? 'bg-near-dark text-white shadow-soft'
+              : 'bg-white/80 text-charcoal-600 hover:text-charcoal-900 border border-border/80 hover:bg-ivory-warm'
+          }`}
+        >
+          <Zap className={`w-4 h-4 ${activeTab === 'live' ? 'text-near-green' : 'text-near-dark'}`} />
+          <span>Live Agent Execution</span>
+          <span
+            className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded-full ${
+              activeTab === 'live' ? 'bg-near-green text-near-dark' : 'bg-near-light text-near-dark'
+            }`}
+          >
+            AUTHENTIC ON-CHAIN
+          </span>
+        </button>
+
         <button
           onClick={() => setActiveTab('cockpit')}
           className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs font-extrabold transition-all ${
@@ -221,13 +251,13 @@ export const AgentsPage: React.FC<AgentsPageProps> = ({
           }`}
         >
           <Terminal className="w-4 h-4" />
-          <span>AI Agent Cockpit & Scenario Simulator</span>
+          <span>AI Cockpit & Simulator</span>
           <span
             className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded-full ${
               activeTab === 'cockpit' ? 'bg-near-green text-near-dark' : 'bg-near-light text-near-dark'
             }`}
           >
-            DAY 3 INTERACTIVE
+            DRY-RUN SIMULATOR
           </span>
         </button>
 
@@ -240,7 +270,7 @@ export const AgentsPage: React.FC<AgentsPageProps> = ({
           }`}
         >
           <Users className="w-4 h-4" />
-          <span>Registered Agent Directory & Keys</span>
+          <span>Registered Directory & Keys</span>
           <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-ivory-warm text-charcoal-700">
             {allKnownAgents.length}
           </span>
@@ -249,7 +279,17 @@ export const AgentsPage: React.FC<AgentsPageProps> = ({
 
       {/* 3. ACTIVE TAB CONTENT */}
       <AnimatePresence mode="wait">
-        {activeTab === 'cockpit' ? (
+        {activeTab === 'live' ? (
+          <motion.div
+            key="live"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.25 }}
+          >
+            <LiveAgentExecutionSection overview={overview} onRefresh={onRefresh} />
+          </motion.div>
+        ) : activeTab === 'cockpit' ? (
           <motion.div
             key="cockpit"
             initial={{ opacity: 0, y: 8 }}
