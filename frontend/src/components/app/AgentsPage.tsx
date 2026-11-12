@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { VaultAccountOverview } from '../../types/contract';
 import { Modal } from '../common/Modal';
@@ -20,6 +20,10 @@ import {
   Search,
   CheckCircle2,
   XCircle,
+  Sparkles,
+  Key,
+  Coins,
+  Shield,
 } from 'lucide-react';
 
 interface AgentsPageProps {
@@ -33,9 +37,22 @@ export const AgentsPage: React.FC<AgentsPageProps> = ({
   onRefresh,
   onOpenPaymentModal,
 }) => {
-  const { accountId, role, executeContractCall } = useWallet();
+  const {
+    accountId,
+    role,
+    executeContractCall,
+    createAgentSubaccount,
+    connectGenuineWallet,
+    isConnected,
+  } = useWallet();
 
-  const [activeTab, setActiveTab] = useState<'cockpit' | 'directory'>('cockpit');
+  const [activeTab, setActiveTab] = useState<'cockpit' | 'directory'>(() => {
+    if (typeof window !== 'undefined') {
+      const hash = window.location.hash.toLowerCase();
+      if (hash.includes('cockpit')) return 'cockpit';
+    }
+    return 'directory';
+  });
   const [isAddAgentModalOpen, setIsAddAgentModalOpen] = useState(false);
   const [newAgentId, setNewAgentId] = useState('');
   const [revokingAgent, setRevokingAgent] = useState<string | null>(null);
@@ -45,7 +62,57 @@ export const AgentsPage: React.FC<AgentsPageProps> = ({
   const [lookupResult, setLookupResult] = useState<{ checked: boolean; isAuthorized: boolean; queriedId: string } | null>(null);
   const [lookupLoading, setLookupLoading] = useState(false);
 
+  // Stage 1 subaccount provisioning state
+  const [isProvisioning, setIsProvisioning] = useState(false);
+  const [subaccountStatus, setSubaccountStatus] = useState<{
+    checked: boolean;
+    exists: boolean;
+    balance?: string;
+    loading: boolean;
+  }>({ checked: false, exists: false, loading: true });
+
   const isOwner = role === 'owner' || (Boolean(accountId) && accountId === overview.ownerId);
+
+  const checkAgentSubaccount = useCallback(async () => {
+    setSubaccountStatus(prev => ({ ...prev, loading: true }));
+    try {
+      const acct = await nearRpc.viewAccount('agent.cleartoad8704.testnet');
+      if (acct) {
+        const nearBalance = (Number(BigInt(acct.amount) / 1000000000000000000000n) / 100).toFixed(2);
+        setSubaccountStatus({
+          checked: true,
+          exists: true,
+          balance: `${nearBalance} NEAR`,
+          loading: false,
+        });
+      } else {
+        setSubaccountStatus({
+          checked: true,
+          exists: false,
+          loading: false,
+        });
+      }
+    } catch {
+      setSubaccountStatus({ checked: true, exists: false, loading: false });
+    }
+  }, []);
+
+  useEffect(() => {
+    checkAgentSubaccount();
+  }, [checkAgentSubaccount]);
+
+  const handleProvisionSubaccount = async () => {
+    setIsProvisioning(true);
+    try {
+      const res = await createAgentSubaccount();
+      if (res.success) {
+        await checkAgentSubaccount();
+        onRefresh();
+      }
+    } finally {
+      setIsProvisioning(false);
+    }
+  };
 
   // Dynamic verified agents from on-chain state
   const allKnownAgents = overview.authorizedAgents.map(a => ({
@@ -201,6 +268,116 @@ export const AgentsPage: React.FC<AgentsPageProps> = ({
             transition={{ duration: 0.25 }}
             className="space-y-6 sm:space-y-8"
           >
+            {/* STAGE 1: AUTONOMOUS AGENT SUBACCOUNT PROVISIONING */}
+            <div className="p-6 sm:p-7 rounded-3xl bg-gradient-to-br from-white via-white to-near-light/20 border-2 border-near-green/30 shadow-card space-y-5 relative overflow-hidden">
+              <div className="absolute top-0 right-0 w-72 h-36 bg-gradient-to-bl from-near-green/10 via-transparent to-transparent pointer-events-none rounded-bl-full" />
+
+              <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+                <div className="flex items-start gap-3.5">
+                  <div className="w-11 h-11 rounded-2xl bg-near-dark text-white flex items-center justify-center shrink-0 shadow-soft">
+                    <Key className="w-5 h-5 text-near-green" />
+                  </div>
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2 mb-1">
+                      <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-near-dark bg-near-light px-2.5 py-0.5 rounded-full border border-near-green/30">
+                        STAGE 1 AUTHORIZATION
+                      </span>
+                      {subaccountStatus.loading ? (
+                        <span className="text-[10px] font-mono text-charcoal-400">Checking on-chain status...</span>
+                      ) : subaccountStatus.exists ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-mono text-[10px] font-bold border border-emerald-200">
+                          <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                          ACCOUNT PROVISIONED ({subaccountStatus.balance})
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700 font-mono text-[10px] font-bold border border-amber-200">
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                          READY FOR CREATION
+                        </span>
+                      )}
+                    </div>
+                    <h3 className="text-base sm:text-lg font-extrabold text-charcoal-900 tracking-tight">
+                      Provision Autonomous Agent Account: <code className="font-mono text-near-dark">agent.cleartoad8704.testnet</code>
+                    </h3>
+                    <p className="mt-1 text-xs text-charcoal-600 max-w-2xl font-sans leading-relaxed">
+                      Creates the dedicated agent subaccount under <code className="font-mono font-bold text-charcoal-800">cleartoad8704.testnet</code>, funds it with exactly 0.10 NEAR, and assigns a restricted FunctionCall key with ZERO FullAccess keys.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Provision Button */}
+                <div className="shrink-0 flex items-center gap-2">
+                  {subaccountStatus.exists ? (
+                    <a
+                      href={getExplorerAccountUrl('agent.cleartoad8704.testnet')}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-near-light hover:bg-near-light/80 text-near-dark text-xs font-bold transition-all shadow-sm"
+                    >
+                      <span>View Account on Explorer</span>
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </a>
+                  ) : !isConnected ? (
+                    <button
+                      onClick={() => connectGenuineWallet('meteor-wallet')}
+                      className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-2xl bg-near-dark hover:bg-near-green text-white text-xs font-bold shadow-soft transition-all active:scale-[0.98]"
+                    >
+                      <Sparkles className="w-4 h-4 text-near-green" />
+                      <span>Connect Meteor Wallet to Provision</span>
+                    </button>
+                  ) : !isOwner ? (
+                    <div className="text-right">
+                      <button
+                        disabled
+                        className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-2xl bg-charcoal-200 text-charcoal-500 text-xs font-bold cursor-not-allowed"
+                      >
+                        <span>Owner Wallet Required</span>
+                      </button>
+                      <p className="text-[10px] text-charcoal-500 font-mono mt-1">Connected: {accountId}</p>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={handleProvisionSubaccount}
+                      disabled={isProvisioning}
+                      className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-2xl bg-near-dark hover:bg-near-green text-white text-xs font-bold shadow-soft transition-all active:scale-[0.98] disabled:opacity-50"
+                    >
+                      <Sparkles className="w-4 h-4 text-near-green" />
+                      <span>{isProvisioning ? 'Staging Transaction...' : 'Initiate Provisioning via Meteor'}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Security Invariants Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 text-xs font-mono">
+                <div className="p-3 rounded-2xl bg-white border border-charcoal-200/80 shadow-sm space-y-1">
+                  <div className="text-[10px] uppercase font-bold text-charcoal-500">Initial Funding</div>
+                  <div className="text-sm font-bold text-charcoal-900 flex items-center gap-1.5">
+                    <Coins className="w-4 h-4 text-amber-500" />
+                    <span>0.10 NEAR</span>
+                  </div>
+                  <div className="text-[10px] text-charcoal-400">100,000,000,000,000,000,000,000 yocto</div>
+                </div>
+
+                <div className="p-3 rounded-2xl bg-white border border-charcoal-200/80 shadow-sm space-y-1">
+                  <div className="text-[10px] uppercase font-bold text-charcoal-500">Access Key Security</div>
+                  <div className="text-sm font-bold text-charcoal-900 flex items-center gap-1.5">
+                    <Shield className="w-4 h-4 text-emerald-600" />
+                    <span>0 FullAccess Keys</span>
+                  </div>
+                  <div className="text-[10px] text-charcoal-400">FunctionCall only (request_payment)</div>
+                </div>
+
+                <div className="p-3 rounded-2xl bg-white border border-charcoal-200/80 shadow-sm space-y-1">
+                  <div className="text-[10px] uppercase font-bold text-charcoal-500">Restricted Public Key</div>
+                  <div className="text-xs font-bold text-near-dark truncate">
+                    ed25519:E1dDCJ...vK24
+                  </div>
+                  <div className="text-[10px] text-charcoal-400">0.25 NEAR gas allowance on vault</div>
+                </div>
+              </div>
+            </div>
+
             {/* REGISTERED AGENTS DIRECTORY */}
             <div className="space-y-4">
               <div className="flex items-center justify-between pb-2 border-b border-border/70">

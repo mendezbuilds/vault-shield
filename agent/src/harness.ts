@@ -79,7 +79,7 @@ export class StandardPolicyFixtureViewProvider implements ContractViewProvider {
     max_per_transaction: '1000000000000000000000000', // 1.0 NEAR
     daily_cap: '2000000000000000000000000', // 2.0 NEAR
     auto_approval_threshold: '200000000000000000000000', // 0.2 NEAR
-    destination_allowlist: ['merchant.vault-parent.testnet'],
+    destination_allowlist: ['whiteice2105.testnet', 'merchant.vault-parent.testnet'],
     is_paused: false,
   };
 
@@ -96,11 +96,16 @@ export class StandardPolicyFixtureViewProvider implements ContractViewProvider {
   public paused = false;
   public authorized = true;
 
+  public owner = 'cleartoad8704.testnet';
+
   async isPaused(): Promise<boolean> {
     return this.paused;
   }
   async isAgentAuthorized(_agentId: string): Promise<boolean> {
     return this.authorized;
+  }
+  async getOwner(): Promise<string> {
+    return this.owner;
   }
   async getPolicy(): Promise<SpendingPolicyView> {
     return this.policy;
@@ -157,6 +162,27 @@ export interface DemoHarnessReport {
   results: ScenarioExecutionResult[];
 }
 
+export function getScenarioDefinition(
+  scenarioKey: 'auto' | 'approval' | 'injection',
+  destinationAllowlist?: string[]
+): ScenarioDefinition {
+  const base = DEMO_SCENARIOS[scenarioKey];
+  if (scenarioKey === 'auto' && destinationAllowlist && destinationAllowlist.length > 0) {
+    if (
+      destinationAllowlist.includes('whiteice2105.testnet') &&
+      !destinationAllowlist.includes('merchant.vault-parent.testnet')
+    ) {
+      const merchant = 'whiteice2105.testnet';
+      return {
+        ...base,
+        prompt: `Purchase 0.05 NEAR worth of indexing service credits from ${merchant}.`,
+        policyExplanation: `Destination allowlisted ("${merchant}") AND amount (0.05 NEAR) <= auto_approval_threshold (0.2 NEAR) -> Immediate autonomous execution without human intervention.`,
+      };
+    }
+  }
+  return base;
+}
+
 // -----------------------------------------------------------------------------
 // Scenario Runner Implementation
 // -----------------------------------------------------------------------------
@@ -169,9 +195,6 @@ export class ScenarioHarness {
       this.agent = customAgent;
     } else {
       const config = loadConfig({
-        agentAccountId: 'agent-a.vault-parent.testnet',
-        vaultContractId: 'contract.vault-parent.testnet',
-        expectedPublicKey: EXPECTED_RESTRICTED_PUBLIC_KEY,
         phase1StrictBoundary: true, // Guarantees dry-run mode
         llmProvider: options.providerName || 'mock',
       });
@@ -186,7 +209,8 @@ export class ScenarioHarness {
     scenarioKey: 'auto' | 'approval' | 'injection',
     options: DemoOptions = {}
   ): Promise<ScenarioExecutionResult> {
-    const def = DEMO_SCENARIOS[scenarioKey];
+    const status = await this.agent.getStatus().catch(() => null);
+    const def = getScenarioDefinition(scenarioKey, status?.destinationAllowlist);
     if (!def) {
       throw new Error(`Unknown scenario key "${scenarioKey}". Expected auto, approval, or injection.`);
     }

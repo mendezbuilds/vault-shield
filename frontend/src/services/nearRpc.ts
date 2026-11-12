@@ -128,6 +128,25 @@ class NearRpcClient {
   }
 
   /**
+   * Fetches the complete list of access keys for an account.
+   */
+  public async viewAccessKeyList(accountId: string): Promise<any> {
+    try {
+      return await this.callRpc('query', {
+        request_type: 'view_access_key_list',
+        finality: 'final',
+        account_id: accountId,
+      });
+    } catch (err: any) {
+      const msg = err?.message || String(err);
+      if (msg.includes('does not exist') || msg.includes('UNKNOWN_ACCOUNT')) {
+        return null;
+      }
+      throw err;
+    }
+  }
+
+  /**
    * Authoritative read method for checking whether an agent account is authorized.
    * Matches the exact contract ABI: `pub fn is_agent_authorized(&self, agent_id: AccountId) -> bool`
    */

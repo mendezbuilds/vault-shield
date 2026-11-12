@@ -1,6 +1,7 @@
 import { setupWalletSelector, WalletSelector, actionCreators } from '@near-wallet-selector/core';
 import { setupMyNearWallet } from '@near-wallet-selector/my-near-wallet';
 import { setupMeteorWallet } from '@near-wallet-selector/meteor-wallet';
+import { PublicKey } from 'near-api-js';
 import {
   VAULT_CONTRACT_ID,
   MAX_PROTOCOL_GAS,
@@ -305,6 +306,58 @@ class NearWalletService {
       console.warn(`[nearWallet] Transfer execution failed:`, err);
       const msg = err?.message || String(err);
       if (msg.includes('User rejected') || msg.includes('USER_CANCELLED')) {
+        throw new Error('Transaction was cancelled by user in wallet');
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Creates an autonomous agent subaccount with ZERO FullAccess keys.
+   * Atomically executes CreateAccount, Transfer (initial funding), and AddKey (restricted FunctionCall).
+   * Triggers an approval popup in Meteor Wallet extension using the owner's FullAccess key.
+   */
+  public async createAgentSubaccount(
+    agentAccountId: string = 'agent.cleartoad8704.testnet',
+    agentPublicKey: string = 'ed25519:E1dDCJgqc7AEhM57PsmXzorNoVTiGBBUgWxHz35bvK24',
+    initialDepositYocto: string = '100000000000000000000000', // 0.1 NEAR
+    allowanceYocto: string = '250000000000000000000000' // 0.25 NEAR
+  ): Promise<string> {
+    if (!this.selector) await this.init();
+    if (!this.selector) throw new Error('Wallet selector not initialized');
+
+    const state = this.selector.store.getState();
+    const active = state.accounts.find(a => a.active) || state.accounts[0];
+    if (!active) throw new Error('No active wallet connected');
+
+    const walletId = state.selectedWalletId;
+    const wallet = await (walletId ? this.selector.wallet(walletId) : this.selector.wallet());
+
+    const actions = [
+      actionCreators.createAccount(),
+      actionCreators.transfer(BigInt(initialDepositYocto)),
+      actionCreators.addKey(
+        PublicKey.fromString(agentPublicKey) as any,
+        actionCreators.functionCallAccessKey(
+          VAULT_CONTRACT_ID,
+          ['request_payment'],
+          BigInt(allowanceYocto)
+        )
+      ),
+    ];
+
+    try {
+      const outcome = await wallet.signAndSendTransaction({
+        signerId: active.accountId,
+        receiverId: agentAccountId,
+        actions,
+      });
+
+      return await this.verifyAndExtractTxHash(outcome, active.accountId);
+    } catch (err: any) {
+      console.warn(`[nearWallet] Agent subaccount creation failed:`, err);
+      const msg = err?.message || String(err);
+      if (msg.includes('User rejected') || msg.includes('USER_CANCELLED') || msg.includes('cancelled')) {
         throw new Error('Transaction was cancelled by user in wallet');
       }
       throw err;

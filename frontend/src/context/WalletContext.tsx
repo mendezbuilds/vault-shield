@@ -46,6 +46,12 @@ export interface WalletContextType {
     receiverId: string,
     yoctoAmount: string
   ) => Promise<{ success: boolean; txHash?: string | null; error?: string }>;
+  createAgentSubaccount: (
+    agentAccountId?: string,
+    agentPublicKey?: string,
+    depositNear?: string,
+    allowanceNear?: string
+  ) => Promise<{ success: boolean; txHash?: string | null; error?: string }>;
 }
 
 const WalletContext = createContext<WalletContextType | undefined>(undefined);
@@ -478,6 +484,106 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     }
   };
 
+  const createAgentSubaccount = async (
+    agentAccountId: string = 'agent.cleartoad8704.testnet',
+    agentPublicKey: string = 'ed25519:E1dDCJgqc7AEhM57PsmXzorNoVTiGBBUgWxHz35bvK24',
+    depositNear: string = '0.1',
+    allowanceNear: string = '0.25'
+  ): Promise<{ success: boolean; txHash?: string | null; error?: string }> => {
+    if (!accountId) {
+      return { success: false, error: 'Please connect a testnet wallet first' };
+    }
+
+    if (authType !== 'genuine_wallet') {
+      return {
+        success: false,
+        error: 'Subaccount creation requires genuine Web3 wallet signing (Meteor Wallet).',
+      };
+    }
+
+    const depositYocto = '100000000000000000000000'; // 0.1 NEAR
+    const allowanceYocto = '250000000000000000000000'; // 0.25 NEAR
+
+    const staged: StagedTransaction = {
+      network: 'NEAR Public Testnet',
+      signerId: accountId,
+      receiverId: agentAccountId,
+      title: 'Review Staged Agent Subaccount Creation',
+      depositYocto,
+      depositNear: `${depositNear} NEAR`,
+      detailedActions: [
+        {
+          action: 'CreateAccount',
+          details: `Create new subaccount: ${agentAccountId}`,
+        },
+        {
+          action: 'Transfer',
+          details: `Transfer ${depositNear} NEAR (${depositYocto} yocto) for initial storage & gas balance`,
+        },
+        {
+          action: 'AddKey (FunctionCall)',
+          details: `Install restricted key ${agentPublicKey.slice(0, 24)}... (Receiver: ${VAULT_CONTRACT_ID}, Method: request_payment, Allowance: ${allowanceNear} NEAR). ZERO FullAccess keys.`,
+        },
+      ],
+    };
+
+    setStagedTx(staged);
+
+    const userConfirmed = await new Promise<boolean>((resolve) => {
+      setPendingConfirm(() => resolve);
+    });
+
+    setStagedTx(null);
+    setPendingConfirm(null);
+
+    if (!userConfirmed) {
+      setTxStatus({ state: 'idle' });
+      return { success: false, error: 'Transaction was cancelled by user before signing' };
+    }
+
+    setTxStatus({
+      state: 'signing',
+      message: `Requesting FullAccess subaccount authorization in Meteor Wallet popup (${accountId})...`,
+    });
+
+    try {
+      const hash = await nearWallet.createAgentSubaccount(
+        agentAccountId,
+        agentPublicKey,
+        depositYocto,
+        allowanceYocto
+      );
+
+      if (!hash || typeof hash !== 'string' || hash.trim().length === 0) {
+        throw new Error('Agent creation completed without a verified transaction hash');
+      }
+
+      setTxStatus({
+        state: 'confirmed',
+        message: `Agent subaccount ${agentAccountId} successfully created and funded!`,
+        txHash: hash,
+      });
+
+      nearRpc.clearCache();
+
+      if (accountId) {
+        fetchBalanceForAccount(accountId).catch(console.warn);
+      }
+
+      return { success: true, txHash: hash };
+    } catch (err: any) {
+      const errMsg = err?.message || String(err) || 'Transaction execution error';
+      const isRejection = /reject|cancel|closed|user denied|not granted/i.test(errMsg);
+      const friendlyError = isRejection ? 'Transaction cancelled by user in wallet.' : errMsg;
+
+      setTxStatus({
+        state: 'failed',
+        error: friendlyError,
+      });
+      return { success: false, error: friendlyError };
+    }
+  };
+
   if (typeof window !== 'undefined' && Boolean(import.meta.env?.DEV)) {
     (window as any).__testExecuteContractCall = executeContractCall;
   }
@@ -502,6 +608,7 @@ export const WalletProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         clearTxStatus,
         executeContractCall,
         transferNativeNear,
+        createAgentSubaccount,
       }}
     >
       {children}

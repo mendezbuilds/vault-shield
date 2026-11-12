@@ -25,6 +25,7 @@ export interface ContractViewProvider {
   getRequest(requestId: number): Promise<PaymentRequestView | null>;
   getTombstone?(requestId: number): Promise<ReconciledTombstoneView | null>;
   getTransactionStatus?(txHash: string, signerAccountId: string): Promise<any>;
+  getOwner?(): Promise<string>;
 }
 
 /**
@@ -131,6 +132,10 @@ export class NearRpcContractViewProvider implements ContractViewProvider {
 
   async getGlobalPendingCount(): Promise<number> {
     return this.callViewMethod<number>('get_global_pending_count');
+  }
+
+  async getOwner(): Promise<string> {
+    return this.callViewMethod<string>('get_owner');
   }
 
   async getRequest(requestId: number): Promise<PaymentRequestView | null> {
@@ -295,7 +300,7 @@ export async function executePreflight(
   let globalPendingCount: number;
 
   try {
-    const [pausedRes, authRes, policyRes, bucketRes, liquidRes, agentPendRes, globalPendRes] = await Promise.all([
+    const [pausedRes, authRes, policyRes, bucketRes, liquidRes, agentPendRes, globalPendRes, ownerRes] = await Promise.all([
       provider.isPaused(),
       provider.isAgentAuthorized(config.agentAccountId),
       provider.getPolicy(),
@@ -303,10 +308,11 @@ export async function executePreflight(
       provider.getAvailableLiquidBalance(),
       provider.getAgentPendingCount(config.agentAccountId),
       provider.getGlobalPendingCount(),
+      provider.getOwner ? provider.getOwner().catch(() => null) : Promise.resolve(null),
     ]);
 
     isPaused = pausedRes;
-    isAuthorized = authRes;
+    isAuthorized = authRes || (Boolean(ownerRes) && config.agentAccountId === ownerRes);
     policy = policyRes;
     bucket = bucketRes;
     liquidBalanceYocto = liquidRes;

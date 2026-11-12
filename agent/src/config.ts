@@ -44,9 +44,12 @@ export interface AgentConfig {
   geminiModel: string;
 }
 
+export const NEW_AGENT_RESTRICTED_PUBLIC_KEY = 'ed25519:E1dDCJgqc7AEhM57PsmXzorNoVTiGBBUgWxHz35bvK24';
 export const EXPECTED_RESTRICTED_PUBLIC_KEY = 'ed25519:2H8EupC9ApTAPYPMu3a5DWxDdcX6X3wX22tcqsocV9Kq';
-export const DEFAULT_CONTRACT_ID = 'contract.vault-parent.testnet';
-export const DEFAULT_AGENT_ACCOUNT_ID = 'agent-a.vault-parent.testnet';
+export const DEFAULT_CONTRACT_ID = 'vault-cleartoad8704.testnet';
+export const DEFAULT_AGENT_ACCOUNT_ID = 'agent.cleartoad8704.testnet';
+export const LEGACY_PARENT_CONTRACT_ID = 'contract.vault-parent.testnet';
+export const LEGACY_AGENT_ACCOUNT_ID = 'agent-a.vault-parent.testnet';
 export const DEFAULT_RPC_TIMEOUT_MS = 8000;
 export const DEFAULT_LOCK_TTL_MS = 15 * 60 * 1000; // 15 minutes
 

@@ -57,12 +57,15 @@ export interface StagedTransaction {
   network: string;
   signerId: string;
   receiverId: string;
-  methodName: string;
-  args: Record<string, any>;
+  methodName?: string;
+  title?: string;
+  actionSummary?: string;
+  detailedActions?: Array<{ action: string; details: string }>;
+  args?: Record<string, any>;
   depositYocto: string;
   depositNear: string;
-  gasUnits: string;
-  gasTgas: string;
+  gasUnits?: string;
+  gasTgas?: string;
 }
 
 export type RequestStatus =

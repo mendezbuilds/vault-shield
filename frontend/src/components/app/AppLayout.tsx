@@ -36,7 +36,18 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
   onRefresh,
   onExitToLanding,
 }) => {
-  const [currentPage, setCurrentPage] = useState<AppPage>('overview');
+  const [currentPage, setCurrentPage] = useState<AppPage>(() => {
+    if (typeof window !== 'undefined') {
+      const hash = window.location.hash.toLowerCase();
+      if (hash.includes('agent')) return 'agents';
+      if (hash.includes('vault')) return 'vault';
+      if (hash.includes('approvals')) return 'approvals';
+      if (hash.includes('transactions')) return 'transactions';
+      if (hash.includes('security')) return 'security';
+      if (hash.includes('settings')) return 'settings';
+    }
+    return 'overview';
+  });
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
   const [isMoreSheetOpen, setIsMoreSheetOpen] = useState<boolean>(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState<boolean>(false);

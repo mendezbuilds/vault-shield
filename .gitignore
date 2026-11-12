@@ -73,6 +73,10 @@ lerna-debug.log*
 logs/
 *.pid
 *.pid.lock
+*.lock
+data/
+**/data/
+.agent.lock
 .eslintcache
 .stylelintcache
 .turbo/

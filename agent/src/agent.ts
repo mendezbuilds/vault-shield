@@ -123,6 +123,7 @@ export class VaultAgent {
       liquidYocto,
       agentPending,
       globalPending,
+      owner,
     ] = await Promise.all([
       this.viewProvider.isPaused(),
       this.viewProvider.isAgentAuthorized(this.config.agentAccountId),
@@ -131,6 +132,7 @@ export class VaultAgent {
       this.viewProvider.getAvailableLiquidBalance(),
       this.viewProvider.getAgentPendingCount(this.config.agentAccountId),
       this.viewProvider.getGlobalPendingCount(),
+      this.viewProvider.getOwner ? this.viewProvider.getOwner().catch(() => null) : Promise.resolve(null),
     ]);
 
     return {
@@ -140,7 +142,7 @@ export class VaultAgent {
       expectedPublicKey: this.config.expectedPublicKey,
       signerPublicKey: this.signer.getPublicKey(),
       hasSigningKey: this.signer.hasSigningCapability(),
-      isAgentAuthorized: isAuthorized,
+      isAgentAuthorized: isAuthorized || (Boolean(owner) && this.config.agentAccountId === owner),
       isVaultPaused: isPaused || policy.is_paused,
       availableLiquidNear: formatYoctoToNear(liquidYocto),
       dailyCapNear: formatYoctoToNear(policy.daily_cap),

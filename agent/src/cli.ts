@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { VaultAgent, parseNearToYocto, formatYoctoToNear } from './agent.js';
 import { generateIntentId } from './ledger.js';
-import { ScenarioHarness } from './harness.js';
+import { ScenarioHarness, StandardPolicyFixtureViewProvider } from './harness.js';
 
 function parseArgs(args: string[]): { command: string; options: Record<string, string | boolean> } {
   const command = args[0] || 'help';
@@ -101,6 +101,7 @@ async function handleStatus(agent: VaultAgent): Promise<void> {
 
 async function handlePreflight(agent: VaultAgent, options: Record<string, string | boolean>): Promise<void> {
   printBanner();
+  const targetAgent = options.fixture ? new VaultAgent(agent.getConfig(), new StandardPolicyFixtureViewProvider()) : agent;
   const dest = options.dest as string;
   const amount = options.amount as string;
   const reason = (options.reason as string) || 'Advisory Pre-flight Simulation';
@@ -135,7 +136,7 @@ async function handlePreflight(agent: VaultAgent, options: Record<string, string
   console.log(`  Amount:      ${amount} NEAR (${amountYocto} yoctoNEAR)`);
   console.log(`  Reason:      ${reason}\n`);
 
-  const result = await agent.preflight(intent);
+  const result = await targetAgent.preflight(intent);
 
   console.log('POLICY CHECKS:');
   for (const check of result.checks) {
@@ -161,6 +162,7 @@ async function handlePreflight(agent: VaultAgent, options: Record<string, string
 
 async function handleRequest(agent: VaultAgent, options: Record<string, string | boolean>): Promise<void> {
   printBanner();
+  const targetAgent = options.fixture ? new VaultAgent(agent.getConfig(), new StandardPolicyFixtureViewProvider()) : agent;
   const dest = options.dest as string;
   const amount = options.amount as string;
   const reason = options.reason as string;
@@ -190,7 +192,7 @@ async function handleRequest(agent: VaultAgent, options: Record<string, string |
   console.log(`  Reason:      ${reason}`);
   console.log(`  Execution:   ${effectiveDryRun ? 'DRY-RUN (Simulation & Payload Verification)' : 'LIVE ON-CHAIN BROADCAST'}\n`);
 
-  const result = await agent.requestPayment(
+  const result = await targetAgent.requestPayment(
     {
       destination: dest,
       amountNear: amount,
@@ -233,6 +235,7 @@ async function handleRequest(agent: VaultAgent, options: Record<string, string |
 
 async function handleTask(agent: VaultAgent, options: Record<string, string | boolean>): Promise<void> {
   printBanner();
+  const targetAgent = options.fixture ? new VaultAgent(agent.getConfig(), new StandardPolicyFixtureViewProvider()) : agent;
   const prompt = (options.prompt as string) || (typeof options._positionalPrompt === 'string' ? options._positionalPrompt : '');
 
   if (!prompt || !prompt.trim()) {
@@ -259,7 +262,7 @@ async function handleTask(agent: VaultAgent, options: Record<string, string | bo
   console.log(`  Provider:    ${providerName || agent.getConfig().llmProvider || 'mock'}`);
   console.log(`  Execution:   ${effectiveDryRun ? 'DRY-RUN (Safe Simulation)' : 'LIVE ON-CHAIN BROADCAST'}\n`);
 
-  const result = await agent.runTask(prompt.trim(), {
+  const result = await targetAgent.runTask(prompt.trim(), {
     dryRun: effectiveDryRun,
     providerName,
   });
@@ -355,7 +358,12 @@ async function handleDemo(agent: VaultAgent, options: Record<string, string | bo
   const providerName = options.provider as string | undefined;
   const useFixture = Boolean(options.fixture);
 
-  const harness = new ScenarioHarness(agent, {
+  let targetAgent = agent;
+  if (useFixture) {
+    targetAgent = new VaultAgent(agent.getConfig(), new StandardPolicyFixtureViewProvider());
+  }
+
+  const harness = new ScenarioHarness(targetAgent, {
     providerName,
     useFixture,
   });
