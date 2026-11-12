@@ -257,6 +257,20 @@ export const LiveAgentExecutionSection: React.FC<LiveAgentExecutionSectionProps>
                 <CheckCircle2 className="w-3 h-3 text-emerald-600" />
                 <span>ON-CHAIN AUTHORIZED AGENT</span>
               </span>
+              <span className={`text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full border flex items-center gap-1.5 shadow-xs ${
+                agentStatus?.hasSigningKey
+                  ? 'text-emerald-900 bg-emerald-100/80 border-emerald-400'
+                  : 'text-amber-900 bg-amber-100/80 border-amber-300'
+              }`}>
+                <span className={`w-2 h-2 rounded-full ${agentStatus?.hasSigningKey ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+                <span>
+                  {agentStatus?.hasSigningKey
+                    ? agentStatus?.signingRuntimeMode === 'remote_persistent'
+                      ? 'SIGNING RUNTIME: PERSISTENT HTTPS CONNECTED'
+                      : 'SIGNING RUNTIME: ACTIVE'
+                    : 'SIGNING RUNTIME: CONNECTING...'}
+                </span>
+              </span>
               <span className="text-[10px] font-mono text-charcoal-400">
                 ZERO-CUSTODY FUNCTION-CALL DELEGATION
               </span>
@@ -313,7 +327,9 @@ export const LiveAgentExecutionSection: React.FC<LiveAgentExecutionSectionProps>
                 {copiedKey ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
               </button>
             </div>
-            <span className="text-[10px] text-charcoal-500 block">FunctionCall (0 FullAccess)</span>
+            <span className="text-[10px] text-emerald-700 font-bold block">
+              {agentStatus?.hasSigningKey ? '● Restricted Key Injected & Ready' : '○ FunctionCall (0 FullAccess)'}
+            </span>
           </div>
 
           <div className="p-3.5 rounded-2xl bg-white border border-border/80 shadow-xs space-y-1">
@@ -794,3 +810,4 @@ export const LiveAgentExecutionSection: React.FC<LiveAgentExecutionSectionProps>
     </div>
   );
 };
+

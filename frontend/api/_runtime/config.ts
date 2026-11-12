@@ -1,5 +1,6 @@
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 
 // Configuration paths
 const envAgentPath = path.resolve(process.cwd(), '.env.agent');
@@ -61,6 +62,8 @@ export interface AgentConfig {
   llmProvider: string;
   geminiApiKey: string | null;
   geminiModel: string;
+  signingRuntimeUrl: string;
+  signingRuntimeSecret: string;
 }
 
 export const NEW_AGENT_RESTRICTED_PUBLIC_KEY = 'ed25519:E1dDCJgqc7AEhM57PsmXzorNoVTiGBBUgWxHz35bvK24';
@@ -70,8 +73,10 @@ export const DEFAULT_CONTRACT_ID = 'vault-cleartoad8704.testnet';
 export const DEFAULT_AGENT_ACCOUNT_ID = 'agent.cleartoad8704.testnet';
 export const LEGACY_PARENT_CONTRACT_ID = 'contract.vault-parent.testnet';
 export const LEGACY_AGENT_ACCOUNT_ID = 'agent-a.vault-parent.testnet';
-export const DEFAULT_RPC_TIMEOUT_MS = 8000;
+export const DEFAULT_RPC_TIMEOUT_MS = 15000;
 export const DEFAULT_LOCK_TTL_MS = 15 * 60 * 1000; // 15 minutes
+export const DEFAULT_SIGNING_RUNTIME_URL = 'https://never-camel-structure-whatever.trycloudflare.com';
+export const DEFAULT_SIGNING_RUNTIME_SECRET = 'vs_runtime_sec_7f9b8c2d1e4a6035';
 
 export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   const allowPlaintextEnv = overrides.allowPlaintextEnv !== undefined
@@ -103,8 +108,18 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
       }
     } catch {}
   }
-  const ledgerPath = overrides.ledgerPath || process.env.AGENT_LEDGER_PATH || path.resolve(process.cwd(), 'data', 'ledger.json');
-  const lockfilePath = overrides.lockfilePath || process.env.AGENT_LOCKFILE_PATH || path.resolve(process.cwd(), '.agent.lock');
+
+  const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+  const defaultBaseDir = isServerless ? os.tmpdir() : process.cwd();
+  const defaultLedgerPath = isServerless
+    ? path.resolve(defaultBaseDir, 'vault-ledger.json')
+    : path.resolve(defaultBaseDir, 'data', 'ledger.json');
+  const defaultLockfilePath = isServerless
+    ? path.resolve(defaultBaseDir, 'vault-agent.lock')
+    : path.resolve(defaultBaseDir, '.agent.lock');
+
+  const ledgerPath = overrides.ledgerPath || process.env.AGENT_LEDGER_PATH || defaultLedgerPath;
+  const lockfilePath = overrides.lockfilePath || process.env.AGENT_LOCKFILE_PATH || defaultLockfilePath;
   const phase1StrictBoundary = overrides.phase1StrictBoundary !== undefined
     ? overrides.phase1StrictBoundary
     : process.env.AGENT_PHASE1_STRICT_BOUNDARY !== 'false';
@@ -113,6 +128,8 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   const llmProvider = overrides.llmProvider || process.env.LLM_PROVIDER || 'mock';
   const geminiApiKey = overrides.geminiApiKey !== undefined ? overrides.geminiApiKey : (process.env.GEMINI_API_KEY || null);
   const geminiModel = overrides.geminiModel || process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+  const signingRuntimeUrl = overrides.signingRuntimeUrl || process.env.AGENT_SIGNING_RUNTIME_URL || DEFAULT_SIGNING_RUNTIME_URL;
+  const signingRuntimeSecret = overrides.signingRuntimeSecret || process.env.AGENT_RUNTIME_SECRET || DEFAULT_SIGNING_RUNTIME_SECRET;
 
   return {
     networkId,
@@ -131,6 +148,8 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     llmProvider,
     geminiApiKey,
     geminiModel,
+    signingRuntimeUrl,
+    signingRuntimeSecret,
   };
 }
 
@@ -138,11 +157,12 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
  * Returns a sanitized copy of configuration safe for logging or terminal display.
  * Strictly guarantees that private keys and sensitive credentials are never serialized or leaked.
  */
-export function getSafeConfig(config: AgentConfig): Omit<AgentConfig, 'privateKey' | 'geminiApiKey'> & { hasPrivateKey: boolean; hasGeminiApiKey: boolean } {
-  const { privateKey, geminiApiKey, ...safe } = config;
+export function getSafeConfig(config: AgentConfig): Omit<AgentConfig, 'privateKey' | 'geminiApiKey' | 'signingRuntimeSecret'> & { hasPrivateKey: boolean; hasGeminiApiKey: boolean; hasSigningRuntimeSecret: boolean } {
+  const { privateKey, geminiApiKey, signingRuntimeSecret, ...safe } = config;
   return {
     ...safe,
     hasPrivateKey: Boolean(privateKey && privateKey.trim().length > 0),
     hasGeminiApiKey: Boolean(geminiApiKey && geminiApiKey.trim().length > 0),
+    hasSigningRuntimeSecret: Boolean(signingRuntimeSecret && signingRuntimeSecret.trim().length > 0),
   };
 }

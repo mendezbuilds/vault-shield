@@ -1,6 +1,12 @@
 import { VaultAgent, parseNearToYocto } from '../_runtime/agent.js';
 import { generateIntentId } from '../_runtime/ledger.js';
-import { NEW_AGENT_RESTRICTED_PUBLIC_KEY, DEFAULT_CONTRACT_ID, DEFAULT_AGENT_ACCOUNT_ID } from '../_runtime/config.js';
+import {
+  NEW_AGENT_RESTRICTED_PUBLIC_KEY,
+  DEFAULT_CONTRACT_ID,
+  DEFAULT_AGENT_ACCOUNT_ID,
+  DEFAULT_SIGNING_RUNTIME_URL,
+  DEFAULT_SIGNING_RUNTIME_SECRET,
+} from '../_runtime/config.js';
 
 async function parseBody(req: any): Promise<any> {
   if (req.body) {
@@ -67,8 +73,53 @@ export default async function handler(req: any, res: any) {
       phase1StrictBoundary: isDryRun, // allow live broadcast if dryRun is false
     });
 
-    // Check if signing key is available for live execution
+    // Check if signing key is available locally or via persistent remote signing runtime
     const agentStatus = await agent.getStatus();
+    const signingRuntimeUrl = process.env.AGENT_SIGNING_RUNTIME_URL || DEFAULT_SIGNING_RUNTIME_URL;
+    const runtimeSecret = process.env.AGENT_RUNTIME_SECRET || DEFAULT_SIGNING_RUNTIME_SECRET;
+
+    if (!agentStatus.hasSigningKey && signingRuntimeUrl) {
+      // Delegate to persistent server-side signing runtime over authenticated HTTPS
+      try {
+        const remoteRes = await fetch(`${signingRuntimeUrl.replace(/\/+$/, '')}/execute`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${runtimeSecret}`,
+            'x-runtime-secret': runtimeSecret,
+            'bypass-tunnel-reminder': 'true',
+          },
+          body: JSON.stringify({
+            destination,
+            amountNear,
+            reason: reason || 'Autonomous payment disbursement',
+            ttlMinutes,
+            dryRun: isDryRun,
+            intentId,
+          }),
+        });
+
+        const remoteData = await remoteRes.json();
+        res.statusCode = remoteRes.status;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify(remoteData));
+        return;
+      } catch (err: any) {
+        if (!isDryRun) {
+          res.statusCode = 502;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(
+            JSON.stringify({
+              success: false,
+              error: `Persistent signing runtime unreachable at ${signingRuntimeUrl}: ${err?.message || 'Connection failed'}`,
+            })
+          );
+          return;
+        }
+        // If dry-run and remote runtime failed, fallback to local dry-run simulation below
+      }
+    }
+
     if (!isDryRun && !agentStatus.hasSigningKey) {
       res.statusCode = 403;
       res.setHeader('Content-Type', 'application/json');
@@ -76,7 +127,7 @@ export default async function handler(req: any, res: any) {
         JSON.stringify({
           success: false,
           error:
-            'Autonomous Agent Restricted Key is not injected in this server environment. Live signing requires AGENT_PRIVATE_KEY or the local runtime credentials (~/.near-credentials/testnet/agent.cleartoad8704.testnet.json).',
+            'Autonomous Agent Restricted Key is not injected in this server environment. Live signing requires AGENT_PRIVATE_KEY or the persistent server runtime (~/.near-credentials/testnet/agent.cleartoad8704.testnet.json).',
         })
       );
       return;
