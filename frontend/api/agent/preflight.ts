@@ -1,8 +1,8 @@
-import { VaultAgent, parseNearToYocto } from './runtime/agent.js';
-import { generateIntentId } from './runtime/ledger.js';
-import { NEW_AGENT_RESTRICTED_PUBLIC_KEY, DEFAULT_CONTRACT_ID, DEFAULT_AGENT_ACCOUNT_ID } from './runtime/config.js';
-import type { PaymentIntent } from './runtime/types.js';
-import { buildPaymentArgs, buildRestrictedFunctionCallAction } from './runtime/signer.js';
+import { VaultAgent, parseNearToYocto } from '../_runtime/agent.js';
+import { generateIntentId } from '../_runtime/ledger.js';
+import { NEW_AGENT_RESTRICTED_PUBLIC_KEY, DEFAULT_CONTRACT_ID, DEFAULT_AGENT_ACCOUNT_ID } from '../_runtime/config.js';
+import type { PaymentIntent } from '../_runtime/types.js';
+import { buildPaymentArgs, buildRestrictedFunctionCallAction } from '../_runtime/signer.js';
 
 async function parseBody(req: any): Promise<any> {
   if (req.body) {
