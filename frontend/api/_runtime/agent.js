@@ -184,7 +184,23 @@ export class VaultAgent {
             }
             // 5. Live On-Chain Broadcast with SEC-01 Pre-Persistence (Phase 2 only)
             // Step A: Sign and derive transaction hash BEFORE broadcasting
-            const { txHash, signedTransaction, preview } = await this.signer.createSignedPaymentTransaction(intent);
+            let txHash;
+            let signedTransaction;
+            let preview;
+            try {
+                const signed = await this.signer.createSignedPaymentTransaction(intent);
+                txHash = signed.txHash;
+                signedTransaction = signed.signedTransaction;
+                preview = signed.preview;
+            }
+            catch (signErr) {
+                const errMsg = signErr?.message || String(signErr);
+                this.ledger.updateRecord(intent.intentId, {
+                    status: 'LOCAL_PREFLIGHT_REJECTED',
+                    errorMessage: `Signer preparation failed before broadcast: ${errMsg}`,
+                });
+                throw signErr;
+            }
             // Step B: DURABLY PERSIST TRANSACTION HASH TO DISK BEFORE BROADCAST
             this.ledger.updateRecord(intent.intentId, {
                 status: 'TRANSACTION_BROADCAST_PENDING',

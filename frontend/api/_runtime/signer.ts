@@ -83,10 +83,15 @@ export class AgentSigner {
   private keyPair: KeyPair | null = null;
   private signer: KeyPairSigner | null = null;
   private account: Account | null = null;
+  private fallbackAccount: Account | null = null;
   private provider: JsonRpcProvider;
+  private fallbackProvider: JsonRpcProvider | null = null;
 
   constructor(private config: AgentConfig) {
     this.provider = new JsonRpcProvider({ url: config.rpcUrl });
+    if (config.fallbackRpcUrl && config.fallbackRpcUrl !== config.rpcUrl) {
+      this.fallbackProvider = new JsonRpcProvider({ url: config.fallbackRpcUrl });
+    }
     this.initializeKey();
   }
 
@@ -101,6 +106,9 @@ export class AgentSigner {
       validateRestrictedKey(this.keyPair, this.config.expectedPublicKey);
       this.signer = new KeyPairSigner(this.keyPair);
       this.account = new Account(this.config.agentAccountId, this.provider, this.signer);
+      if (this.fallbackProvider) {
+        this.fallbackAccount = new Account(this.config.agentAccountId, this.fallbackProvider, this.signer);
+      }
     } catch (err: any) {
       // Strictly guarantee that any private key material is stripped from error output
       let safeMsg = err?.message || 'Failed to initialize agent signer';
@@ -155,11 +163,24 @@ export class AgentSigner {
     const args = buildPaymentArgs(intent);
     const action = buildRestrictedFunctionCallAction(args);
 
-    const tx = await this.account.createTransaction({
-      receiverId: this.config.vaultContractId,
-      actions: [action],
-      publicKey: await this.signer.getPublicKey(),
-    });
+    let tx: any;
+    try {
+      tx = await this.account.createTransaction({
+        receiverId: this.config.vaultContractId,
+        actions: [action],
+        publicKey: await this.signer.getPublicKey(),
+      });
+    } catch (primaryErr: any) {
+      if (this.fallbackAccount) {
+        tx = await this.fallbackAccount.createTransaction({
+          receiverId: this.config.vaultContractId,
+          actions: [action],
+          publicKey: await this.signer.getPublicKey(),
+        });
+      } else {
+        throw primaryErr;
+      }
+    }
 
     const { txHash, signedTransaction } = await this.signer.signTransaction(tx);
     const txHashBase58 = baseEncode(txHash);
@@ -183,7 +204,14 @@ export class AgentSigner {
       );
     }
 
-    return await this.provider.sendTransactionUntil(signedTransaction, 'FINAL');
+    try {
+      return await this.provider.sendTransactionUntil(signedTransaction, 'FINAL');
+    } catch (broadcastErr: any) {
+      if (this.fallbackProvider) {
+        return await this.fallbackProvider.sendTransactionUntil(signedTransaction, 'FINAL');
+      }
+      throw broadcastErr;
+    }
   }
 
   /**

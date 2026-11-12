@@ -35,7 +35,9 @@ export declare class AgentSigner {
     private keyPair;
     private signer;
     private account;
+    private fallbackAccount;
     private provider;
+    private fallbackProvider;
     constructor(config: AgentConfig);
     private initializeKey;
     hasSigningCapability(): boolean;

@@ -243,10 +243,18 @@ export function createSigningServer(options = {}) {
             sendJson(404, { error: `Endpoint not found: ${req.method} ${pathname}` });
         }
         catch (err) {
-            console.error('Runtime Server Error:', err?.message || 'Internal error');
+            let errMsg = err?.message || 'Internal error';
+            if (agentConfig.privateKey) {
+                errMsg = errMsg.replaceAll(agentConfig.privateKey, '[REDACTED]');
+            }
+            if (agentConfig.signingRuntimeSecret) {
+                errMsg = errMsg.replaceAll(agentConfig.signingRuntimeSecret, '[REDACTED]');
+            }
+            errMsg = errMsg.replace(/ed25519:[A-Za-z0-9_]+/g, '[REDACTED_KEY]');
+            console.error('Runtime Server Error:', errMsg);
             sendJson(500, {
                 success: false,
-                error: 'Internal signing runtime server error',
+                error: `Internal signing runtime server error: ${errMsg}`,
             });
         }
     });

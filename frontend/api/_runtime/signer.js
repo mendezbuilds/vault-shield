@@ -57,10 +57,15 @@ export class AgentSigner {
     keyPair = null;
     signer = null;
     account = null;
+    fallbackAccount = null;
     provider;
+    fallbackProvider = null;
     constructor(config) {
         this.config = config;
         this.provider = new JsonRpcProvider({ url: config.rpcUrl });
+        if (config.fallbackRpcUrl && config.fallbackRpcUrl !== config.rpcUrl) {
+            this.fallbackProvider = new JsonRpcProvider({ url: config.fallbackRpcUrl });
+        }
         this.initializeKey();
     }
     initializeKey() {
@@ -73,6 +78,9 @@ export class AgentSigner {
             validateRestrictedKey(this.keyPair, this.config.expectedPublicKey);
             this.signer = new KeyPairSigner(this.keyPair);
             this.account = new Account(this.config.agentAccountId, this.provider, this.signer);
+            if (this.fallbackProvider) {
+                this.fallbackAccount = new Account(this.config.agentAccountId, this.fallbackProvider, this.signer);
+            }
         }
         catch (err) {
             // Strictly guarantee that any private key material is stripped from error output
@@ -117,11 +125,26 @@ export class AgentSigner {
         }
         const args = buildPaymentArgs(intent);
         const action = buildRestrictedFunctionCallAction(args);
-        const tx = await this.account.createTransaction({
-            receiverId: this.config.vaultContractId,
-            actions: [action],
-            publicKey: await this.signer.getPublicKey(),
-        });
+        let tx;
+        try {
+            tx = await this.account.createTransaction({
+                receiverId: this.config.vaultContractId,
+                actions: [action],
+                publicKey: await this.signer.getPublicKey(),
+            });
+        }
+        catch (primaryErr) {
+            if (this.fallbackAccount) {
+                tx = await this.fallbackAccount.createTransaction({
+                    receiverId: this.config.vaultContractId,
+                    actions: [action],
+                    publicKey: await this.signer.getPublicKey(),
+                });
+            }
+            else {
+                throw primaryErr;
+            }
+        }
         const { txHash, signedTransaction } = await this.signer.signTransaction(tx);
         const txHashBase58 = baseEncode(txHash);
         const preview = this.previewPayload(intent);
@@ -139,7 +162,15 @@ export class AgentSigner {
         if (this.config.phase1StrictBoundary) {
             throw new Error('Strict Phase 1 Execution Boundary Active: Live on-chain transaction broadcasting is prohibited in this milestone. Use --dry-run or inspect the payload preview.');
         }
-        return await this.provider.sendTransactionUntil(signedTransaction, 'FINAL');
+        try {
+            return await this.provider.sendTransactionUntil(signedTransaction, 'FINAL');
+        }
+        catch (broadcastErr) {
+            if (this.fallbackProvider) {
+                return await this.fallbackProvider.sendTransactionUntil(signedTransaction, 'FINAL');
+            }
+            throw broadcastErr;
+        }
     }
     /**
      * Broadcasts a transaction using two-stage signing.

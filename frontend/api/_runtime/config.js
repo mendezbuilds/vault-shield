@@ -60,8 +60,8 @@ export function loadConfig(overrides = {}) {
         parseSimpleEnv(envAgentPath);
     }
     const networkId = overrides.networkId || process.env.NEAR_NETWORK_ID || 'testnet';
-    const rpcUrl = overrides.rpcUrl || process.env.NEAR_RPC_URL || 'https://rpc.testnet.near.org';
-    const fallbackRpcUrl = overrides.fallbackRpcUrl || process.env.NEAR_FALLBACK_RPC_URL || 'https://test.rpc.fastnear.com';
+    const rpcUrl = overrides.rpcUrl || process.env.NEAR_RPC_URL || 'https://test.rpc.fastnear.com';
+    const fallbackRpcUrl = overrides.fallbackRpcUrl || process.env.NEAR_FALLBACK_RPC_URL || 'https://rpc.testnet.near.org';
     const vaultContractId = overrides.vaultContractId || process.env.VAULT_CONTRACT_ID || DEFAULT_CONTRACT_ID;
     const agentAccountId = overrides.agentAccountId || process.env.AGENT_ACCOUNT_ID || DEFAULT_AGENT_ACCOUNT_ID;
     const expectedPublicKey = overrides.expectedPublicKey || process.env.AGENT_EXPECTED_PUBLIC_KEY || EXPECTED_RESTRICTED_PUBLIC_KEY;
