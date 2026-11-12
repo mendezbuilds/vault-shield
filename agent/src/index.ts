@@ -6,5 +6,6 @@ export * from './ledger.js';
 export * from './agent.js';
 export * from './llm.js';
 export * from './harness.js';
+export * from './auth.js';
 export * from './server.js';
 

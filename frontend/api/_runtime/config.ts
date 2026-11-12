@@ -1,6 +1,7 @@
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import { getEffectiveRuntimeSecret } from './auth.js';
 
 // Configuration paths
 const envAgentPath = path.resolve(process.cwd(), '.env.agent');
@@ -76,7 +77,7 @@ export const LEGACY_AGENT_ACCOUNT_ID = 'agent-a.vault-parent.testnet';
 export const DEFAULT_RPC_TIMEOUT_MS = 15000;
 export const DEFAULT_LOCK_TTL_MS = 15 * 60 * 1000; // 15 minutes
 export const DEFAULT_SIGNING_RUNTIME_URL = 'https://never-camel-structure-whatever.trycloudflare.com';
-export const DEFAULT_SIGNING_RUNTIME_SECRET = 'vs_runtime_sec_7f9b8c2d1e4a6035';
+export const DEFAULT_SIGNING_RUNTIME_SECRET = getEffectiveRuntimeSecret();
 
 export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   const allowPlaintextEnv = overrides.allowPlaintextEnv !== undefined

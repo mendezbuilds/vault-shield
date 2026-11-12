@@ -28,7 +28,7 @@ export declare const LEGACY_AGENT_ACCOUNT_ID = "agent-a.vault-parent.testnet";
 export declare const DEFAULT_RPC_TIMEOUT_MS = 15000;
 export declare const DEFAULT_LOCK_TTL_MS: number;
 export declare const DEFAULT_SIGNING_RUNTIME_URL = "https://never-camel-structure-whatever.trycloudflare.com";
-export declare const DEFAULT_SIGNING_RUNTIME_SECRET = "vs_runtime_sec_7f9b8c2d1e4a6035";
+export declare const DEFAULT_SIGNING_RUNTIME_SECRET: string;
 export declare function loadConfig(overrides?: Partial<AgentConfig>): AgentConfig;
 /**
  * Returns a sanitized copy of configuration safe for logging or terminal display.

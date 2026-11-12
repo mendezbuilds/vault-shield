@@ -14,7 +14,7 @@ async function startTunnel(port: number): Promise<any> {
     });
 
     console.log(`🚀 HTTPS Tunnel Established: ${tunnel.url}`);
-    console.log(`🔐 Authorization Bearer: ${RUNTIME_SECRET}`);
+    console.log(`🔐 Authorization: Bearer [REDACTED_RUNTIME_SECRET]`);
     console.log(`📋 Health Check: ${tunnel.url}/health`);
 
     tunnel.on('close', () => {

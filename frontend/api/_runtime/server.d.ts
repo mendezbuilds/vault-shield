@@ -6,10 +6,12 @@ export interface SigningServerOptions {
     port?: number;
     config?: Partial<AgentConfig>;
     secret?: string;
+    rateLimitMaxRequests?: number;
 }
 /**
  * Creates and starts the persistent server-side signing runtime for Vault Shield.
- * Guarantees zero private key leakage, strictly restricts execution to
+ * Guarantees zero private key leakage, timing-safe authentication, strict origin
+ * filtering, rate limiting, and restricts execution strictly to
  * request_payment on vault-cleartoad8704.testnet with zero deposit.
  */
 export declare function createSigningServer(options?: SigningServerOptions): {

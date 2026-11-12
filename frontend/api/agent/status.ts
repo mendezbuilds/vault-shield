@@ -4,6 +4,7 @@ import {
   DEFAULT_CONTRACT_ID,
   DEFAULT_AGENT_ACCOUNT_ID,
   DEFAULT_SIGNING_RUNTIME_URL,
+  DEFAULT_SIGNING_RUNTIME_SECRET,
 } from '../_runtime/config.js';
 
 export default async function handler(req: any, res: any) {
@@ -35,7 +36,8 @@ export default async function handler(req: any, res: any) {
 
     // Verify signing capability: either local embedded key or persistent remote signing runtime
     const signingRuntimeUrl = process.env.AGENT_SIGNING_RUNTIME_URL || DEFAULT_SIGNING_RUNTIME_URL;
-    status.configuredSigningUrl = signingRuntimeUrl;
+    const runtimeSecret = process.env.AGENT_RUNTIME_SECRET || DEFAULT_SIGNING_RUNTIME_SECRET;
+
     if (!status.hasSigningKey && signingRuntimeUrl) {
       try {
         const controller = new AbortController();
@@ -43,6 +45,8 @@ export default async function handler(req: any, res: any) {
         const healthRes = await fetch(`${signingRuntimeUrl.replace(/\/+$/, '')}/health`, {
           signal: controller.signal,
           headers: {
+            Authorization: `Bearer ${runtimeSecret}`,
+            'x-runtime-secret': runtimeSecret,
             'bypass-tunnel-reminder': 'true',
           },
         });
@@ -58,14 +62,9 @@ export default async function handler(req: any, res: any) {
             status.signerPublicKey = healthData.restrictedPublicKey;
             status.signingRuntimeMode = 'remote_persistent';
             status.signingRuntimeUrl = signingRuntimeUrl;
-          } else {
-            status.signingRuntimeError = `Mismatched key or no capability: ${JSON.stringify(healthData)}`;
           }
-        } else {
-          status.signingRuntimeError = `Health check returned HTTP ${healthRes.status}`;
         }
       } catch (err: any) {
-        status.signingRuntimeError = err?.message || String(err);
         // Persistent runtime unreachable; retain status.hasSigningKey = false
       }
     } else if (status.hasSigningKey) {

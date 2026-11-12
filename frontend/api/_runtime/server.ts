@@ -11,24 +11,40 @@ import { VaultAgent, parseNearToYocto } from './agent.js';
 import { validateRestrictedKey } from './signer.js';
 import { generateIntentId } from './ledger.js';
 import { PaymentIntent } from './types.js';
+import {
+  getEffectiveRuntimeSecret,
+  validateRuntimeAuth,
+  isOriginAllowed,
+  RateLimiter,
+} from './auth.js';
 
 export const DEFAULT_RUNTIME_PORT = 3888;
-export const RUNTIME_SECRET = process.env.AGENT_RUNTIME_SECRET || 'vs_runtime_sec_7f9b8c2d1e4a6035';
+export const RUNTIME_SECRET = getEffectiveRuntimeSecret();
 
 export interface SigningServerOptions {
   port?: number;
   config?: Partial<AgentConfig>;
   secret?: string;
+  rateLimitMaxRequests?: number;
 }
 
 /**
  * Creates and starts the persistent server-side signing runtime for Vault Shield.
- * Guarantees zero private key leakage, strictly restricts execution to
+ * Guarantees zero private key leakage, timing-safe authentication, strict origin
+ * filtering, rate limiting, and restricts execution strictly to
  * request_payment on vault-cleartoad8704.testnet with zero deposit.
  */
 export function createSigningServer(options: SigningServerOptions = {}) {
   const port = options.port || Number(process.env.AGENT_RUNTIME_PORT) || DEFAULT_RUNTIME_PORT;
-  const secret = options.secret || RUNTIME_SECRET;
+  const secret = options.secret || getEffectiveRuntimeSecret();
+  const maxExecuteRate = options.rateLimitMaxRequests !== undefined ? options.rateLimitMaxRequests : 30;
+
+  // Rate limiter instance (sliding window)
+  const rateLimiter = new RateLimiter(60_000, maxExecuteRate);
+
+  // Periodically clean up stale rate-limit buckets
+  const cleanupInterval = setInterval(() => rateLimiter.cleanup(), 120_000);
+  cleanupInterval.unref();
 
   // Load config with credentials from ~/.near-credentials or .env.agent
   const agentConfig = loadConfig({
@@ -54,8 +70,17 @@ export function createSigningServer(options: SigningServerOptions = {}) {
   }
 
   const server = http.createServer(async (req, res) => {
-    // Standard CORS and tunnel bypass headers
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    // 1. Origin verification
+    const origin = req.headers['origin'] as string | undefined;
+    if (origin && !isOriginAllowed(origin)) {
+      res.statusCode = 403;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ success: false, error: 'Forbidden: Origin not authorized by Vault Shield security policy' }));
+      return;
+    }
+
+    // Standard CORS and tunnel bypass headers (allow origin if verified)
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-runtime-secret, bypass-tunnel-reminder');
 
@@ -75,12 +100,12 @@ export function createSigningServer(options: SigningServerOptions = {}) {
       res.end(JSON.stringify(data));
     };
 
-    // Helper to verify shared-secret authentication
+    // Extract client IP for rate limiting
+    const rawIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || req.socket.remoteAddress || 'unknown';
+
+    // Helper to verify shared-secret authentication (timing-safe)
     const checkAuth = (): boolean => {
-      const authHeader = req.headers['authorization'] || '';
-      const customHeader = req.headers['x-runtime-secret'] || '';
-      const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader.trim();
-      return bearerToken === secret || customHeader === secret;
+      return validateRuntimeAuth(req.headers as any, secret);
     };
 
     // Parse JSON request body
@@ -100,11 +125,29 @@ export function createSigningServer(options: SigningServerOptions = {}) {
     };
 
     try {
-      // 1. HEALTH CHECK: Read-only, confirms key loaded & public key validation
+      // 2. HEALTH CHECK: Confirms service liveness. Full restricted-key telemetry only if authenticated.
       if ((pathname === '/health' || pathname === '/api/health' || pathname === '/') && req.method === 'GET') {
-        const status = await agent.getStatus();
+        const rateCheck = rateLimiter.check(rawIp, 60);
+        if (!rateCheck.allowed) {
+          res.setHeader('Retry-After', Math.ceil(rateCheck.resetInMs / 1000).toString());
+          sendJson(429, { success: false, error: 'Too Many Requests' });
+          return;
+        }
 
-        // Enforce exact public key match
+        const isAuthed = checkAuth();
+        if (!isAuthed) {
+          // Unauthenticated public probe: return basic liveness without exposing internal telemetry
+          sendJson(200, {
+            status: 'healthy',
+            service: 'vault-shield-persistent-signing-runtime',
+            authenticated: false,
+            timestamp: Date.now(),
+          });
+          return;
+        }
+
+        // Authenticated probe: full validation
+        const status = await agent.getStatus();
         const isKeyMatching = status.signerPublicKey === NEW_AGENT_RESTRICTED_PUBLIC_KEY;
 
         sendJson(200, {
@@ -127,21 +170,33 @@ export function createSigningServer(options: SigningServerOptions = {}) {
           },
           concurrencyLock: 'ProcessLock active',
           ledgerStorage: 'persistent',
+          authenticated: true,
           uptimeSeconds: Math.floor(process.uptime()),
           timestamp: Date.now(),
         });
         return;
       }
 
-      // 2. STATUS REPORT: Detailed status
+      // 3. STATUS REPORT: Detailed status (requires authentication)
       if ((pathname === '/status' || pathname === '/api/status') && req.method === 'GET') {
+        if (!checkAuth()) {
+          sendJson(401, { success: false, error: 'Unauthorized: Authentication required' });
+          return;
+        }
         const status = await agent.getStatus();
         sendJson(200, { success: true, status });
         return;
       }
 
-      // 3. PREFLIGHT: Run deterministic preflight checks without signing
+      // 4. PREFLIGHT: Run deterministic preflight checks without signing
       if ((pathname === '/preflight' || pathname === '/api/preflight') && req.method === 'POST') {
+        const rateCheck = rateLimiter.check(rawIp, 20);
+        if (!rateCheck.allowed) {
+          res.setHeader('Retry-After', Math.ceil(rateCheck.resetInMs / 1000).toString());
+          sendJson(429, { success: false, error: 'Too Many Requests' });
+          return;
+        }
+
         const body = await parseBody();
         const destination = (body.destination || '').trim();
         const amountNear = (body.amountNear || '').trim();
@@ -168,17 +223,28 @@ export function createSigningServer(options: SigningServerOptions = {}) {
         };
 
         const preflight = await agent.preflight(intent);
-
         sendJson(200, { success: preflight.success, preflight });
         return;
       }
 
-      // 4. EXECUTE: Authenticated live signing or dry-run execution
+      // 5. EXECUTE: Authenticated live signing or dry-run execution
       if ((pathname === '/execute' || pathname === '/api/execute') && req.method === 'POST') {
+        // Enforce rate limit for execute
+        const rateCheck = rateLimiter.check(rawIp, maxExecuteRate);
+        if (!rateCheck.allowed) {
+          res.setHeader('Retry-After', Math.ceil(rateCheck.resetInMs / 1000).toString());
+          sendJson(429, {
+            success: false,
+            error: `Too Many Requests: Rate limit exceeded for execution endpoint (max ${maxExecuteRate}/min)`,
+          });
+          return;
+        }
+
+        // Timing-safe authentication check
         if (!checkAuth()) {
           sendJson(401, {
             success: false,
-            error: 'Unauthorized: Valid runtime secret required via Authorization: Bearer <secret> or x-runtime-secret header',
+            error: 'Unauthorized: Valid runtime authentication secret required',
           });
           return;
         }
@@ -237,10 +303,10 @@ export function createSigningServer(options: SigningServerOptions = {}) {
       // Route Not Found
       sendJson(404, { error: `Endpoint not found: ${req.method} ${pathname}` });
     } catch (err: any) {
-      console.error('Runtime Server Error:', err);
+      console.error('Runtime Server Error:', err?.message || 'Internal error');
       sendJson(500, {
         success: false,
-        error: err?.message || 'Internal signing runtime server error',
+        error: 'Internal signing runtime server error',
       });
     }
   });
@@ -254,6 +320,7 @@ export function createSigningServer(options: SigningServerOptions = {}) {
           console.log(`🔑 Authorized Signer: ${agentConfig.agentAccountId}`);
           console.log(`🎯 Target Vault: ${agentConfig.vaultContractId}`);
           console.log(`🔒 Restricted Key: ${NEW_AGENT_RESTRICTED_PUBLIC_KEY}`);
+          console.log(`🔐 Authentication: Timing-Safe Secret Rotation Active`);
           resolve();
         });
       });

@@ -111,7 +111,7 @@ export default async function handler(req: any, res: any) {
           res.end(
             JSON.stringify({
               success: false,
-              error: `Persistent signing runtime unreachable at ${signingRuntimeUrl}: ${err?.message || 'Connection failed'}`,
+              error: 'Persistent signing runtime service temporarily unreachable. Ensure the secure ingress daemon is active.',
             })
           );
           return;
