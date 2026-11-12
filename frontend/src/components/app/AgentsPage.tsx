@@ -78,7 +78,7 @@ export const AgentsPage: React.FC<AgentsPageProps> = ({
     try {
       const acct = await nearRpc.viewAccount('agent.cleartoad8704.testnet');
       if (acct) {
-        const nearBalance = (Number(BigInt(acct.amount) / 1000000000000000000000n) / 100).toFixed(2);
+        const nearBalance = (Number(BigInt(acct.amount) / 1000000000000000000000n) / 1000).toFixed(2);
         setSubaccountStatus({
           checked: true,
           exists: true,
