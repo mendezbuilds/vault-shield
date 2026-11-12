@@ -1,5 +1,6 @@
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 // Configuration paths
 const envAgentPath = path.resolve(process.cwd(), '.env.agent');
 const envDefaultPath = path.resolve(process.cwd(), '.env');
@@ -76,8 +77,16 @@ export function loadConfig(overrides = {}) {
         }
         catch { }
     }
-    const ledgerPath = overrides.ledgerPath || process.env.AGENT_LEDGER_PATH || path.resolve(process.cwd(), 'data', 'ledger.json');
-    const lockfilePath = overrides.lockfilePath || process.env.AGENT_LOCKFILE_PATH || path.resolve(process.cwd(), '.agent.lock');
+    const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+    const defaultBaseDir = isServerless ? os.tmpdir() : process.cwd();
+    const defaultLedgerPath = isServerless
+        ? path.resolve(defaultBaseDir, 'vault-ledger.json')
+        : path.resolve(defaultBaseDir, 'data', 'ledger.json');
+    const defaultLockfilePath = isServerless
+        ? path.resolve(defaultBaseDir, 'vault-agent.lock')
+        : path.resolve(defaultBaseDir, '.agent.lock');
+    const ledgerPath = overrides.ledgerPath || process.env.AGENT_LEDGER_PATH || defaultLedgerPath;
+    const lockfilePath = overrides.lockfilePath || process.env.AGENT_LOCKFILE_PATH || defaultLockfilePath;
     const phase1StrictBoundary = overrides.phase1StrictBoundary !== undefined
         ? overrides.phase1StrictBoundary
         : process.env.AGENT_PHASE1_STRICT_BOUNDARY !== 'false';

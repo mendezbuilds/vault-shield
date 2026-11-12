@@ -30,10 +30,12 @@ export class ProcessLock {
   ) {}
 
   public acquire(): void {
-    const lockDir = path.dirname(this.lockfilePath);
-    if (!fs.existsSync(lockDir)) {
-      fs.mkdirSync(lockDir, { recursive: true });
-    }
+    try {
+      const lockDir = path.dirname(this.lockfilePath);
+      if (!fs.existsSync(lockDir)) {
+        fs.mkdirSync(lockDir, { recursive: true });
+      }
+    } catch {}
 
     // Check for existing lock and evaluate staleness
     if (fs.existsSync(this.lockfilePath)) {
@@ -155,10 +157,12 @@ export class ExecutionLedger {
   }
 
   private load(): void {
-    const dir = path.dirname(this.ledgerPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
+    try {
+      const dir = path.dirname(this.ledgerPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+    } catch {}
 
     if (fs.existsSync(this.ledgerPath)) {
       try {
