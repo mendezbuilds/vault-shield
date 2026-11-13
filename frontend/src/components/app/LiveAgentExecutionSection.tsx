@@ -29,6 +29,12 @@ import {
   Zap,
 } from 'lucide-react';
 import { getExplorerAccountUrl, getExplorerTxUrl } from '../../utils/formatters';
+import {
+  VaultPaymentRecord,
+  verifyPaymentReceiptOnChain,
+} from '../../services/paymentVerification';
+import { PaymentReceiptVerificationCard } from '../common/PaymentReceiptVerificationCard';
+
 
 interface LiveAgentExecutionSectionProps {
   overview: VaultAccountOverview;
@@ -111,6 +117,8 @@ export const LiveAgentExecutionSection: React.FC<LiveAgentExecutionSectionProps>
   const [isExecuting, setIsExecuting] = useState(false);
   const [executionResult, setExecutionResult] = useState<ExecutionResponse | null>(null);
   const [executionError, setExecutionError] = useState<string | null>(null);
+  const [executionReceiptId, setExecutionReceiptId] = useState<string | null>(null);
+
 
   const [copiedKey, setCopiedKey] = useState(false);
 
@@ -225,11 +233,22 @@ export const LiveAgentExecutionSection: React.FC<LiveAgentExecutionSectionProps>
 
       const data = await res.json();
       setExecutionResult(data);
+      setExecutionReceiptId(null);
 
       if (data.success) {
         setIsReviewModalOpen(false);
         onRefresh();
         fetchStatus();
+
+        if (data.txHash) {
+          verifyPaymentReceiptOnChain(data.txHash, destination.trim(), AGENT_ACCOUNT_ID)
+            .then(receiptRes => {
+              if (receiptRes.receiptId) {
+                setExecutionReceiptId(receiptRes.receiptId);
+              }
+            })
+            .catch(() => {});
+        }
       } else {
         setExecutionError(data.error || data.message || 'Execution failed');
       }
@@ -805,6 +824,37 @@ export const LiveAgentExecutionSection: React.FC<LiveAgentExecutionSectionProps>
               </div>
             )}
           </div>
+
+          {/* 5. ON-CHAIN VERIFICATION & DOWNSTREAM RECEIPT TRACKING */}
+          {executionResult.success && (
+            <div className="pt-2">
+              <PaymentReceiptVerificationCard
+                payment={{
+                  id: executionResult.intentId,
+                  requestId: executionResult.requestId || 1,
+                  senderVault: VAULT_CONTRACT_ID,
+                  recipient: destination.trim(),
+                  amountNear: amountNear.trim(),
+                  amountYocto: (BigInt(Math.round(parseFloat(amountNear || '0') * 1e5)) * 10n ** 19n).toString(),
+                  currency: 'NEAR',
+                  status: 'PAYMENT_EXECUTED',
+                  parentTxHash: executionResult.txHash || '',
+                  receiptId: executionReceiptId,
+                  timestamp: Date.now(),
+                  reason: reason.trim(),
+                  executionRoute:
+                    executionResult.status === 'DRY_RUN_SUCCESS'
+                      ? 'Safe Dry-Run Simulation'
+                      : 'Autonomous Agent Payment Dispatch',
+                  parentTxConfirmed: Boolean(executionResult.txHash),
+                  receiptConfirmed: Boolean(executionReceiptId),
+                  signerId: AGENT_ACCOUNT_ID,
+                }}
+                showBalanceWidget={true}
+                defaultExpanded={true}
+              />
+            </div>
+          )}
         </motion.div>
       )}
     </div>

@@ -113,8 +113,32 @@ export function getExplorerAccountUrl(accountId: string): string {
  * Generates an explorer link for a NEAR Testnet Transaction.
  */
 export function getExplorerTxUrl(txHash: string): string {
+  if (!txHash) return '';
   return `${NEAR_EXPLORER_BASE}/txns/${txHash}`;
 }
+
+/**
+ * Generates an explorer link for a downstream NEAR Transfer Receipt.
+ * Returns null if receiptId is missing or unverified, ensuring no broken or speculative links.
+ */
+export function getExplorerReceiptUrl(receiptId?: string | null): string | null {
+  if (!receiptId || !receiptId.trim() || receiptId.toLowerCase().includes('not yet verified')) {
+    return null;
+  }
+  return `https://explorer.testnet.near.org/transactions/${receiptId.trim()}`;
+}
+
+/**
+ * Formats a transfer receipt ID for safe UI presentation.
+ * Returns "Receipt not yet verified" if the receipt ID cannot be obtained.
+ */
+export function formatReceiptId(receiptId?: string | null): string {
+  if (!receiptId || !receiptId.trim()) {
+    return 'Receipt not yet verified';
+  }
+  return receiptId.trim();
+}
+
 
 /**
  * Returns UI metadata for Audit Event Types.

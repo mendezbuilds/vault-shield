@@ -13,6 +13,11 @@ import {
   STANDARD_BASELINE_FIXTURE,
 } from '../../services/agentHarness';
 import {
+  HISTORICAL_VERIFIED_PAYMENTS,
+} from '../../services/paymentVerification';
+import { PaymentReceiptVerificationCard } from '../common/PaymentReceiptVerificationCard';
+
+import {
   Bot,
   ShieldCheck,
   CheckCircle2,
@@ -49,6 +54,8 @@ export const AiAgentCockpit: React.FC<AiAgentCockpitProps> = ({ overview }) => {
   const [isPreflightAccordionOpen, setIsPreflightAccordionOpen] = useState<boolean>(true);
   const [isSignerPreviewOpen, setIsSignerPreviewOpen] = useState<boolean>(false);
   const [copiedKey, setCopiedKey] = useState<boolean>(false);
+  const [selectedHistoricalPaymentIndex, setSelectedHistoricalPaymentIndex] = useState<number>(0);
+
 
   // Suite runner state for "Run All 3 Scenarios"
   const [suiteResults, setSuiteResults] = useState<{
@@ -793,7 +800,7 @@ export const AiAgentCockpit: React.FC<AiAgentCockpitProps> = ({ overview }) => {
         </div>
       </div>
 
-      {/* 5. VERIFIED ON-CHAIN HISTORICAL EVIDENCE STRIP */}
+      {/* 5. VERIFIED ON-CHAIN HISTORICAL EVIDENCE STRIP (Requirements 1, 2, 3, 4, 5, 6) */}
       <div className="p-5 sm:p-7 rounded-3xl bg-white/90 backdrop-blur-xl border border-white/95 shadow-card space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-border/70">
           <div>
@@ -802,73 +809,43 @@ export const AiAgentCockpit: React.FC<AiAgentCockpitProps> = ({ overview }) => {
                 LIVE ON-CHAIN EVIDENCE
               </span>
               <span className="text-[10px] font-mono text-charcoal-400">
-                HISTORICAL TESTNET EXECUTION PROOF
+                VERIFIED HACKATHON TEST PAYMENTS
               </span>
             </div>
             <h3 className="text-base sm:text-lg font-extrabold text-charcoal-900">
-              Verified Phase 2 Live Payment Proof (Request #13)
+              Verified Autonomous Payments & Receipt Tracking
             </h3>
           </div>
 
-          <a
-            href={VERIFIED_PHASE2_PROOF.explorerTxUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-surface-white hover:bg-ivory-warm text-charcoal-900 border border-border text-xs font-bold transition-all shrink-0"
-          >
-            <span>Inspect On NEARBlocks</span>
-            <ExternalLink className="w-3.5 h-3.5 text-charcoal-500" />
-          </a>
+          {/* Selector between Payment 1 and Payment 2 */}
+          <div className="flex items-center gap-2 p-1 rounded-xl bg-ivory-warm border border-border text-xs font-mono">
+            {HISTORICAL_VERIFIED_PAYMENTS.slice(0, 2).map((p, idx) => (
+              <button
+                key={p.id}
+                onClick={() => setSelectedHistoricalPaymentIndex(idx)}
+                className={`px-3 py-1.5 rounded-lg transition-all font-bold text-[11px] flex items-center gap-1.5 ${
+                  selectedHistoricalPaymentIndex === idx
+                    ? 'bg-white text-emerald-950 shadow-soft border border-emerald-300'
+                    : 'text-charcoal-600 hover:text-charcoal-900'
+                }`}
+              >
+                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                <span>Payment {idx + 1}: {p.recipient.split('.')[0]}</span>
+              </button>
+            ))}
+          </div>
         </div>
 
         <p className="text-xs text-charcoal-600 font-sans leading-relaxed">
-          While demonstration scenarios operate in safe dry-run mode, the underlying Vault Shield payment pipeline was verified with a live testnet transaction on contract <code className="font-mono text-charcoal-900 font-bold">{VERIFIED_PHASE2_PROOF.contractId}</code>:
+          While demonstration scenarios can operate in dry-run mode, the autonomous payment pipeline was executed on NEAR Public Testnet on vault contract <code className="font-mono text-charcoal-900 font-bold">{HISTORICAL_VERIFIED_PAYMENTS[selectedHistoricalPaymentIndex].senderVault}</code>. Distinguish parent transactions from downstream transfer receipts below:
         </p>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs font-mono">
-          <div className="p-3.5 rounded-2xl bg-ivory-warm/60 border border-border/80">
-            <span className="text-[10px] text-charcoal-400 block uppercase">Contract Request</span>
-            <span className="font-extrabold text-charcoal-900 text-sm">#{VERIFIED_PHASE2_PROOF.requestId}</span>
-            <span className="text-[10px] text-emerald-700 block mt-0.5 font-bold">Status: {VERIFIED_PHASE2_PROOF.status}</span>
-          </div>
-
-          <div className="p-3.5 rounded-2xl bg-ivory-warm/60 border border-border/80">
-            <span className="text-[10px] text-charcoal-400 block uppercase">Authorized Agent</span>
-            <span className="font-bold text-charcoal-900 truncate block">{VERIFIED_PHASE2_PROOF.agentId}</span>
-            <span className="text-[10px] text-charcoal-500 block mt-0.5">Zero custody held</span>
-          </div>
-
-          <div className="p-3.5 rounded-2xl bg-ivory-warm/60 border border-border/80">
-            <span className="text-[10px] text-charcoal-400 block uppercase">Recipient & Amount</span>
-            <span className="font-bold text-near-dark">{VERIFIED_PHASE2_PROOF.amountNear} NEAR</span>
-            <span className="text-[10px] text-charcoal-500 block mt-0.5 truncate">{VERIFIED_PHASE2_PROOF.destination}</span>
-          </div>
-
-          <div className="p-3.5 rounded-2xl bg-ivory-warm/60 border border-border/80">
-            <span className="text-[10px] text-charcoal-400 block uppercase">NEAR Transaction Hash</span>
-            <span className="font-bold text-charcoal-900 truncate block text-[11px]">{VERIFIED_PHASE2_PROOF.txHash.slice(0, 16)}...</span>
-            <span className="text-[10px] text-emerald-700 block mt-0.5 font-bold">Confirmed on-chain</span>
-          </div>
-        </div>
-
-        {/* Emitted Audit Records Sequence (Audited strictly to #39 & #40) */}
-        <div className="p-3.5 rounded-2xl bg-ivory-warm/40 border border-border/70 text-xs font-mono">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-charcoal-400 block mb-2">
-            CONTRACT AUDIT LOG SEQUENCE (IMMUTABLE LOGS)
-          </span>
-          <div className="space-y-1.5">
-            {VERIFIED_PHASE2_PROOF.events.map((evt, idx) => (
-              <div key={idx} className="flex items-center gap-2 text-[11px] text-charcoal-700">
-                <span className="w-1.5 h-1.5 rounded-full bg-near-green" />
-                <span>{evt}</span>
-              </div>
-            ))}
-          </div>
-          <div className="mt-2.5 pt-2 border-t border-border/60 text-[10px] font-sans text-charcoal-500">
-            <span className="font-bold text-charcoal-700">Verification note: </span>
-            {VERIFIED_PHASE2_PROOF.routeNote}
-          </div>
-        </div>
+        {/* Full Verification Card with Parent Tx & Receipt Separation, Live Balance, and Explanation */}
+        <PaymentReceiptVerificationCard
+          payment={HISTORICAL_VERIFIED_PAYMENTS[selectedHistoricalPaymentIndex]}
+          showBalanceWidget={true}
+          defaultExpanded={true}
+        />
       </div>
     </div>
   );
