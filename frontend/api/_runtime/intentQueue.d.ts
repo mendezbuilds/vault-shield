@@ -31,6 +31,7 @@ export declare class IntentQueue {
     constructor(storagePath: string);
     reload(): void;
     private load;
+    private ensureBootstrapIntents;
     private save;
     /**
      * Evaluates external handoff deadlines for uningested intents.
