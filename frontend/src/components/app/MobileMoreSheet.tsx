@@ -50,6 +50,13 @@ export const MobileMoreSheet: React.FC<MobileMoreSheetProps> = ({
 
   const secondaryNavItems = [
     {
+      id: 'intents' as AppPage,
+      label: 'Intent Center',
+      description: 'Native & external AI agent payment intents',
+      icon: <Layers className="w-5 h-5 text-indigo-600" />,
+      color: 'bg-indigo-50 text-indigo-700',
+    },
+    {
       id: 'agents' as AppPage,
       label: 'AI Agents',
       description: 'Spend allowances & access keys',

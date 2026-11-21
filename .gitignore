@@ -130,3 +130,5 @@ Thumbs.db
 # ------------------------------------------------------------------------------
 phase0_step26.txt
 phase0_step36.txt
+my-video/
+frontend/api/_runtime/*.map

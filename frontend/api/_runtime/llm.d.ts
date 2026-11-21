@@ -33,6 +33,21 @@ export type ValidationResult = {
  * - 'reason': Non-empty string, max length 256.
  */
 export declare function validatePaymentToolArgs(args: unknown): ValidationResult;
+export interface ParsedNaturalLanguageIntent {
+    destination: string | null;
+    amountNear: string | null;
+    amountYocto: string | null;
+    currency: string;
+    reason: string;
+    ttlMinutes: number;
+    confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+    rawPrompt: string;
+}
+/**
+ * Parses natural-language payment prompts into structured payment parameters
+ * for user inspection and review prior to intent queue submission.
+ */
+export declare function parseNaturalLanguageIntent(taskPrompt: string): ParsedNaturalLanguageIntent;
 export type LLMDecision = {
     type: 'tool_call';
     toolName: string;

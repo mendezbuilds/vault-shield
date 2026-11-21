@@ -123,6 +123,102 @@ export function validatePaymentToolArgs(args: unknown): ValidationResult {
   };
 }
 
+export interface ParsedNaturalLanguageIntent {
+  destination: string | null;
+  amountNear: string | null;
+  amountYocto: string | null;
+  currency: string;
+  reason: string;
+  ttlMinutes: number;
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+  rawPrompt: string;
+}
+
+/**
+ * Parses natural-language payment prompts into structured payment parameters
+ * for user inspection and review prior to intent queue submission.
+ */
+export function parseNaturalLanguageIntent(taskPrompt: string): ParsedNaturalLanguageIntent {
+  const trimmed = (taskPrompt || '').trim();
+
+  // Extract NEAR amount: "0.05 NEAR", "0.1near", "10.5 N", "Send 0.05 to"
+  const amountMatch =
+    trimmed.match(/([0-9]+(?:\.[0-9]+)?)\s*(?:NEAR|near|N)\b/i) ||
+    trimmed.match(/(?:send|transfer|pay|disburse)\s+([0-9]+(?:\.[0-9]+)?)\s+(?:to|for)\b/i);
+
+  // Extract TTL if explicitly stated in prompt: e.g. "ttl 30m" or "expiry 120 minutes"
+  const ttlMatch = trimmed.match(/(?:ttl|expiry|expires in)\s*[:=]?\s*([0-9]+)\s*(?:m|min|minutes)?/i);
+  const ttlMinutes = ttlMatch ? Math.max(parseInt(ttlMatch[1], 10), 5) : 60;
+
+  // Extract candidate destination
+  let destination: string | null = null;
+  const destMatches = Array.from(
+    trimmed.matchAll(/\b(?:to|from|recipient|destination)\s+([a-zA-Z0-9._-]+)/gi)
+  );
+
+  for (const m of destMatches) {
+    const candidate = m[1].replace(/[.,;:!?]+$/, '').trim();
+    if (isValidNearAccountId(candidate)) {
+      destination = candidate;
+      break;
+    }
+  }
+
+  // Fallback destination check for bare .testnet / .near account mentions in prompt
+  if (!destination) {
+    const bareMatch = trimmed.match(/\b([a-zA-Z0-9._-]+\.testnet)\b/i);
+    if (bareMatch && isValidNearAccountId(bareMatch[1])) {
+      destination = bareMatch[1];
+    }
+  }
+
+  // Extract reason
+  let reason = 'AI Agent Payment Disbursement';
+  const worthOfMatch = trimmed.match(/worth\s+of\s+([^.,\n]+)/i);
+  const isForAmount = /\bfor\s+[0-9]/i.test(trimmed);
+  const forMatch = !isForAmount ? trimmed.match(/\b(?:for|reason:?)\s+([^.,\n]+)/i) : null;
+  const actionMatch = trimmed.match(
+    /^(?:purchase|subscribe(?:\s+to)?|pay(?:\s+for)?|procure|send|disburse)\s+([^.,\n]+?)(?:\s+from|\s+to|\s+for|\s+[0-9]|$)/i
+  );
+
+  if (worthOfMatch) {
+    reason = worthOfMatch[1].trim();
+  } else if (forMatch) {
+    reason = forMatch[1].trim();
+  } else if (actionMatch && actionMatch[1].trim().length > 3) {
+    reason = actionMatch[1].trim();
+  }
+
+  const amountNear = amountMatch ? amountMatch[1].trim() : null;
+  let amountYocto: string | null = null;
+
+  if (amountNear) {
+    try {
+      amountYocto = parseNearToYocto(amountNear);
+    } catch {
+      amountYocto = null;
+    }
+  }
+
+  let confidence: 'HIGH' | 'MEDIUM' | 'LOW' = 'LOW';
+  if (destination && amountNear && amountYocto) {
+    confidence = 'HIGH';
+  } else if (destination || amountNear) {
+    confidence = 'MEDIUM';
+  }
+
+  return {
+    destination,
+    amountNear,
+    amountYocto,
+    currency: 'NEAR',
+    reason,
+    ttlMinutes,
+    confidence,
+    rawPrompt: trimmed,
+  };
+}
+
 // -----------------------------------------------------------------------------
 // Provider Types & Abstractions
 // -----------------------------------------------------------------------------

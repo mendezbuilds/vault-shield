@@ -224,6 +224,19 @@ export const AgentsPage: React.FC<AgentsPageProps> = ({
       {/* 2. SUB-VIEW SELECTOR TABS */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border/70 pb-2">
         <button
+          onClick={() => {
+            window.location.hash = '#app/intents';
+          }}
+          className="flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs font-extrabold transition-all bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200"
+        >
+          <Layers className="w-4 h-4 text-indigo-600" />
+          <span>AI Intent Center</span>
+          <span className="text-[9px] font-mono font-bold px-2 py-0.5 rounded-full bg-indigo-200 text-indigo-950">
+            DUAL-CHANNEL HUB
+          </span>
+        </button>
+
+        <button
           onClick={() => setActiveTab('live')}
           className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs font-extrabold transition-all ${
             activeTab === 'live'

@@ -9,6 +9,7 @@ import { ApprovalsPage } from './ApprovalsPage';
 import { TransactionsPage } from './TransactionsPage';
 import { SecurityCenterPage } from './SecurityCenterPage';
 import { SettingsPage } from './SettingsPage';
+import { IntentCenterPage } from './IntentCenterPage';
 import { PaymentRequestModal } from './PaymentRequestModal';
 import { TxNotificationModal } from '../common/TxNotificationModal';
 import { VaultAccountOverview, VAULT_CONTRACT_ID } from '../../types/contract';
@@ -39,6 +40,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
   const [currentPage, setCurrentPage] = useState<AppPage>(() => {
     if (typeof window !== 'undefined') {
       const hash = window.location.hash.toLowerCase();
+      if (hash.includes('intent')) return 'intents';
       if (hash.includes('agent')) return 'agents';
       if (hash.includes('vault')) return 'vault';
       if (hash.includes('approvals')) return 'approvals';
@@ -53,7 +55,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState<boolean>(false);
 
   // Check if current page is one of the secondary routes accessed via More
-  const isMoreActive = ['agents', 'security', 'settings'].includes(currentPage);
+  const isMoreActive = ['intents', 'agents', 'security', 'settings'].includes(currentPage);
 
   // Loading state
   if (loading && !overview) {
@@ -142,6 +144,13 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
           )}
           {currentPage === 'vault' && (
             <MyVaultPage overview={overview} onRefresh={onRefresh} />
+          )}
+          {currentPage === 'intents' && (
+            <IntentCenterPage
+              overview={overview}
+              onRefresh={onRefresh}
+              onNavigateToApprovals={() => setCurrentPage('approvals')}
+            />
           )}
           {currentPage === 'agents' && (
             <AgentsPage

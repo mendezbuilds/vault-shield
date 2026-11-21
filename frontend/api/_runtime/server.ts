@@ -8,6 +8,7 @@ import {
   AgentConfig,
 } from './config.js';
 import { VaultAgent, parseNearToYocto } from './agent.js';
+import { ContractViewProvider } from './preflight.js';
 import { validateRestrictedKey } from './signer.js';
 import { generateIntentId } from './ledger.js';
 import { PaymentIntent } from './types.js';
@@ -17,6 +18,9 @@ import {
   isOriginAllowed,
   RateLimiter,
 } from './auth.js';
+import { ApiTokenManager } from './apiTokens.js';
+import { IntentQueue } from './intentQueue.js';
+import { parseNaturalLanguageIntent } from './llm.js';
 
 export const DEFAULT_RUNTIME_PORT = 3888;
 export const RUNTIME_SECRET = getEffectiveRuntimeSecret();
@@ -26,6 +30,7 @@ export interface SigningServerOptions {
   config?: Partial<AgentConfig>;
   secret?: string;
   rateLimitMaxRequests?: number;
+  viewProvider?: ContractViewProvider;
 }
 
 /**
@@ -61,8 +66,12 @@ export function createSigningServer(options: SigningServerOptions = {}) {
     console.error('❌ FATAL: Signer private key not found in environment or ~/.near-credentials');
   }
 
-  const agent = new VaultAgent(agentConfig);
+  const agent = new VaultAgent(agentConfig, options.viewProvider);
   const safeConfig = agent.getConfig();
+
+  // Persistent Intent Queue and External Agent API Token Manager
+  const intentQueue = new IntentQueue(agentConfig.intentsPath);
+  const apiTokenManager = new ApiTokenManager(agentConfig.apiTokensPath);
 
   // Validate restricted public key immediately
   if (!safeConfig.hasPrivateKey) {
@@ -112,7 +121,13 @@ export function createSigningServer(options: SigningServerOptions = {}) {
     const parseBody = async (): Promise<any> => {
       return new Promise((resolve, reject) => {
         let raw = '';
-        req.on('data', chunk => { raw += chunk; });
+        req.on('data', chunk => {
+          raw += chunk;
+          if (raw.length > 65536) {
+            req.destroy();
+            reject(new Error('Payload Too Large: Maximum request body size is 64KB'));
+          }
+        });
         req.on('end', () => {
           try {
             resolve(raw ? JSON.parse(raw) : {});
@@ -297,6 +312,286 @@ export function createSigningServer(options: SigningServerOptions = {}) {
           preflight: result.preflight,
           error: result.error,
         });
+        return;
+      }
+
+      // 6. NATURAL LANGUAGE INTENT PARSER: Preview structured payment parameters without execution
+      if ((pathname === '/intents/parse' || pathname === '/api/intents/parse' || pathname === '/api/agent/intents/parse') && req.method === 'POST') {
+        const body = await parseBody();
+        const prompt = (body.prompt || body.naturalPrompt || '').trim();
+        if (!prompt) {
+          sendJson(400, { success: false, error: 'Missing prompt parameter to parse' });
+          return;
+        }
+
+        const parsed = parseNaturalLanguageIntent(prompt);
+        sendJson(200, { success: true, parsed });
+        return;
+      }
+
+      // 7. SUBMIT INTENT: Dashboard Native or External AI Agent API
+      if ((pathname === '/intents' || pathname === '/api/intents' || pathname === '/api/agent/intents') && req.method === 'POST') {
+        const authHeader = (Array.isArray(req.headers['authorization']) ? req.headers['authorization'][0] : req.headers['authorization']) || '';
+        const customTokenHeader = (Array.isArray(req.headers['x-agent-api-key']) ? req.headers['x-agent-api-key'][0] : req.headers['x-agent-api-key']) || '';
+        const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader.trim();
+        const candidateToken = bearerToken || customTokenHeader.trim();
+
+        let source: 'DASHBOARD' | 'EXTERNAL_AGENT' = 'EXTERNAL_AGENT';
+        let agentIdentifier = 'External Agent';
+
+        // Check if caller is Dashboard using runtime secret
+        if (checkAuth()) {
+          source = 'DASHBOARD';
+          agentIdentifier = 'Dashboard Operator';
+        } else {
+          // External agent token validation
+          if (!candidateToken) {
+            sendJson(401, {
+              success: false,
+              error: 'Unauthorized: Valid Agent API Token (Bearer vsa_live_...) required.',
+            });
+            return;
+          }
+
+          const tokenResult = apiTokenManager.validateToken(candidateToken);
+          if (!tokenResult.valid) {
+            sendJson(tokenResult.statusCode || 401, {
+              success: false,
+              error: tokenResult.error || 'Unauthorized: Invalid API token',
+            });
+            return;
+          }
+
+          source = 'EXTERNAL_AGENT';
+          agentIdentifier = tokenResult.token?.agentName || 'External AI Agent';
+        }
+
+        const body = await parseBody();
+        let destination = (body.destination || '').trim();
+        let amountNear = (body.amountNear || '').trim();
+        let reason = (body.reason || '').trim();
+        let ttlMinutes = Number(body.ttlMinutes) || 60;
+        const prompt = (body.prompt || body.naturalPrompt || '').trim();
+        const idempotencyKey = (body.idempotencyKey || req.headers['idempotency-key'] as string || '').trim();
+        const processNow = body.processNow !== false; // Default true: feed immediately into VaultAgent
+
+        // If prompt provided and structured fields missing, parse prompt
+        if (prompt && (!destination || !amountNear)) {
+          const parsed = parseNaturalLanguageIntent(prompt);
+          if (parsed.destination && !destination) destination = parsed.destination;
+          if (parsed.amountNear && !amountNear) amountNear = parsed.amountNear;
+          if (!reason) reason = parsed.reason;
+          if (parsed.ttlMinutes && !body.ttlMinutes) ttlMinutes = parsed.ttlMinutes;
+        }
+
+        if (!destination || !amountNear) {
+          sendJson(400, {
+            success: false,
+            error: 'Invalid intent payload: destination and amountNear are required.',
+          });
+          return;
+        }
+
+        const submissionResult = intentQueue.submitIntent({
+          destination,
+          amountNear,
+          reason: reason || 'AI agent payment intent',
+          ttlMinutes,
+          source,
+          agentId: agentIdentifier,
+          rawPrompt: prompt || undefined,
+          idempotencyKey: idempotencyKey || undefined,
+          createdAt: body.createdAt ? Number(body.createdAt) : undefined,
+          intentId: body.intentId,
+        });
+
+        let finalIntent = submissionResult.intent;
+
+        // If not duplicate and requested to process immediately, feed into VaultAgent pipeline
+        if (!submissionResult.isDuplicate && processNow && finalIntent.status === 'RECEIVED') {
+          finalIntent = await intentQueue.processIntent(finalIntent.intentId, agent, {
+            dryRun: body.dryRun === true,
+          });
+        }
+
+        sendJson(200, {
+          success: true,
+          isDuplicate: submissionResult.isDuplicate,
+          intent: finalIntent,
+        });
+        return;
+      }
+
+      // 8. LIST INTENTS: Query intent inbox with filtering and pagination
+      if ((pathname === '/intents' || pathname === '/api/intents' || pathname === '/api/agent/intents') && req.method === 'GET') {
+        const authHeader = (Array.isArray(req.headers['authorization']) ? req.headers['authorization'][0] : req.headers['authorization']) || '';
+        const customTokenHeader = (Array.isArray(req.headers['x-agent-api-key']) ? req.headers['x-agent-api-key'][0] : req.headers['x-agent-api-key']) || '';
+        const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader.trim();
+        const candidateToken = bearerToken || customTokenHeader.trim();
+
+        let allowedAgentName: string | undefined = undefined;
+        if (checkAuth()) {
+          // Dashboard Operator / Vault Owner: allowed full visibility
+        } else if (candidateToken) {
+          const tokenResult = apiTokenManager.validateToken(candidateToken);
+          if (!tokenResult.valid) {
+            sendJson(tokenResult.statusCode || 401, { success: false, error: tokenResult.error });
+            return;
+          }
+          allowedAgentName = tokenResult.token?.agentName;
+        } else {
+          sendJson(401, { success: false, error: 'Unauthorized: Authentication required to view intent inbox.' });
+          return;
+        }
+
+        const statusParam = (url.searchParams.get('status') || 'ALL') as any;
+        const sourceParam = (url.searchParams.get('source') || 'ALL') as any;
+        const searchParam = url.searchParams.get('search') || undefined;
+        const limitParam = Number(url.searchParams.get('limit')) || 50;
+        const offsetParam = Number(url.searchParams.get('offset')) || 0;
+
+        // Reconcile pending intents
+        await intentQueue.reconcileIntents(agent);
+
+        const result = intentQueue.listIntents({
+          status: statusParam,
+          source: sourceParam,
+          search: searchParam,
+          limit: limitParam,
+          offset: offsetParam,
+        });
+
+        // External agents are isolated and may only inspect their own submitted intents
+        const filteredIntents = allowedAgentName
+          ? result.intents.filter(i => i.agentId === allowedAgentName)
+          : result.intents;
+
+        sendJson(200, {
+          success: true,
+          intents: filteredIntents,
+          total: allowedAgentName ? filteredIntents.length : result.total,
+        });
+        return;
+      }
+
+      // 9. INTENT DETAILS: Single intent inspection by ID
+      const singleIntentMatch = pathname.match(/^\/(?:api\/)?(?:agent\/)?intents\/([a-zA-Z0-9_-]+)$/);
+      if (singleIntentMatch && req.method === 'GET') {
+        const authHeader = (Array.isArray(req.headers['authorization']) ? req.headers['authorization'][0] : req.headers['authorization']) || '';
+        const customTokenHeader = (Array.isArray(req.headers['x-agent-api-key']) ? req.headers['x-agent-api-key'][0] : req.headers['x-agent-api-key']) || '';
+        const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader.trim();
+        const candidateToken = bearerToken || customTokenHeader.trim();
+
+        let allowedAgentName: string | undefined = undefined;
+        if (checkAuth()) {
+          // Dashboard Operator / Vault Owner: allowed full inspection
+        } else if (candidateToken) {
+          const tokenResult = apiTokenManager.validateToken(candidateToken);
+          if (!tokenResult.valid) {
+            sendJson(tokenResult.statusCode || 401, { success: false, error: tokenResult.error });
+            return;
+          }
+          allowedAgentName = tokenResult.token?.agentName;
+        } else {
+          sendJson(401, { success: false, error: 'Unauthorized: Authentication required to inspect intent.' });
+          return;
+        }
+
+        const targetIntentId = singleIntentMatch[1];
+        const intent = intentQueue.getIntent(targetIntentId);
+
+        if (!intent) {
+          sendJson(404, { success: false, error: `Intent not found: ${targetIntentId}` });
+          return;
+        }
+
+        // Prevent cross-agent inspection
+        if (allowedAgentName && intent.agentId !== allowedAgentName) {
+          sendJson(403, { success: false, error: 'Forbidden: Cannot inspect intents submitted by another agent.' });
+          return;
+        }
+
+        sendJson(200, { success: true, intent });
+        return;
+      }
+
+      // 10. TRIGGER INTENT PROCESSING: Manually dispatch/ingest an intent in queue
+      const processIntentMatch = pathname.match(/^\/(?:api\/)?(?:agent\/)?intents\/([a-zA-Z0-9_-]+)\/process$/);
+      if (processIntentMatch && req.method === 'POST') {
+        if (!checkAuth()) {
+          sendJson(401, { success: false, error: 'Unauthorized: Vault Owner authorization required to trigger intent processing.' });
+          return;
+        }
+
+        const targetIntentId = processIntentMatch[1];
+        const body = await parseBody();
+        try {
+          const processed = await intentQueue.processIntent(targetIntentId, agent, {
+            dryRun: body.dryRun === true,
+          });
+          sendJson(200, { success: true, intent: processed });
+        } catch (err: any) {
+          sendJson(400, { success: false, error: err.message });
+        }
+        return;
+      }
+
+      // 11. API TOKEN MANAGEMENT: Generate, list, and revoke external agent API credentials
+      if ((pathname === '/tokens' || pathname === '/api/tokens' || pathname === '/api/agent/tokens') && req.method === 'GET') {
+        if (!checkAuth()) {
+          sendJson(401, { success: false, error: 'Unauthorized: Vault Owner authentication required to view API tokens.' });
+          return;
+        }
+
+        const tokens = apiTokenManager.listTokens();
+        sendJson(200, { success: true, tokens });
+        return;
+      }
+
+      if ((pathname === '/tokens' || pathname === '/api/tokens' || pathname === '/api/agent/tokens') && req.method === 'POST') {
+        if (!checkAuth()) {
+          sendJson(401, { success: false, error: 'Unauthorized: Vault Owner authentication required to issue API tokens.' });
+          return;
+        }
+
+        const body = await parseBody();
+        const agentName = (body.agentName || '').trim();
+        if (!agentName) {
+          sendJson(400, { success: false, error: 'agentName is required to generate an API token.' });
+          return;
+        }
+
+        const { token, record } = apiTokenManager.createToken({
+          agentName,
+          permissions: body.permissions,
+          rateLimitPerMin: body.rateLimitPerMin ? Number(body.rateLimitPerMin) : 60,
+          expiresInMs: body.expiresInDays ? Number(body.expiresInDays) * 86400 * 1000 : undefined,
+        });
+
+        sendJson(201, {
+          success: true,
+          message: 'API Token generated. Store this secret securely; it will not be displayed again.',
+          token,
+          record,
+        });
+        return;
+      }
+
+      const revokeTokenMatch = pathname.match(/^\/(?:api\/)?(?:agent\/)?tokens\/([a-zA-Z0-9_-]+)\/revoke$/);
+      if (revokeTokenMatch && req.method === 'POST') {
+        if (!checkAuth()) {
+          sendJson(401, { success: false, error: 'Unauthorized: Vault Owner authentication required to revoke API tokens.' });
+          return;
+        }
+
+        const targetTokenId = revokeTokenMatch[1];
+        const revoked = apiTokenManager.revokeToken(targetTokenId);
+        if (!revoked) {
+          sendJson(404, { success: false, error: `Token not found: ${targetTokenId}` });
+          return;
+        }
+
+        sendJson(200, { success: true, revoked: true, tokenId: targetTokenId });
         return;
       }
 

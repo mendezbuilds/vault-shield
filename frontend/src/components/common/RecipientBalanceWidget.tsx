@@ -270,3 +270,4 @@ export const RecipientBalanceWidget: React.FC<RecipientBalanceWidgetProps> = ({
     </div>
   );
 };
+

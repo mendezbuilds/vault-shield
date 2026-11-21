@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createSigningServer, RUNTIME_SECRET, DEFAULT_RUNTIME_PORT } from '../dist/server.js';
+import { StandardPolicyFixtureViewProvider } from '../dist/harness.js';
 import { NEW_AGENT_RESTRICTED_PUBLIC_KEY, DEFAULT_CONTRACT_ID, DEFAULT_AGENT_ACCOUNT_ID } from '../dist/config.js';
 import { timingSafeEqualString, isOriginAllowed, RateLimiter } from '../dist/auth.js';
 
@@ -12,6 +13,7 @@ test('Persistent Signing Runtime Server — Security & Confinement', async (t) =
     port: testPort,
     secret: testSecret,
     rateLimitMaxRequests: 50,
+    viewProvider: new StandardPolicyFixtureViewProvider(),
     config: {
       allowPlaintextEnv: true,
       phase1StrictBoundary: true, // Safety: strictly dry-run in test

@@ -196,3 +196,86 @@ export interface VaultAccountOverview {
   isInitialized: boolean;
   codeHashMatches: boolean;
 }
+
+// -----------------------------------------------------------------------------
+// Intent Center & Persistent Queue Types
+// -----------------------------------------------------------------------------
+
+export const EXTERNAL_HANDOFF_WINDOW_MS = 300 * 1000; // 300 seconds
+export const DEFAULT_VAULT_TTL_SECONDS = 3600; // 1 hour
+
+export type IntentLifecycleStatus =
+  | 'RECEIVED'
+  | 'INGESTED'
+  | 'VALIDATING'
+  | 'PREFLIGHT'
+  | 'AWAITING_APPROVAL'
+  | 'DISPATCHED'
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'EXPIRED'
+  | 'HANDOFF_EXPIRED';
+
+export type IntentSource = 'DASHBOARD' | 'EXTERNAL_AGENT';
+
+export interface IntentAuditEntry {
+  timestamp: number;
+  status: IntentLifecycleStatus;
+  message: string;
+  details?: Record<string, any>;
+}
+
+export interface StoredIntent {
+  intentId: string;
+  source: IntentSource;
+  agentId?: string;
+  rawPrompt?: string;
+  destination: string;
+  amountNear: string;
+  amountYocto: string;
+  currency: string;
+  reason: string;
+  status: IntentLifecycleStatus;
+
+  createdAt: number;
+  handoffDeadline: number;
+  ingestedAt?: number;
+
+  vaultTtlSeconds: number;
+  vaultDeadline?: number;
+  acceptedAt?: number;
+
+  requestId?: number;
+  txHash?: string;
+  downstreamReceiptId?: string;
+  errorMessage?: string;
+  preflightResult?: any;
+  attempts: number;
+  idempotencyKey?: string;
+
+  auditTrail: IntentAuditEntry[];
+}
+
+export interface AgentApiToken {
+  tokenId: string;
+  agentName: string;
+  tokenPrefix: string;
+  createdAt: number;
+  expiresAt?: number | null;
+  revoked: boolean;
+  revokedAt?: number | null;
+  permissions: string[];
+  rateLimitPerMin: number;
+}
+
+export interface ParsedNaturalLanguageIntent {
+  destination: string | null;
+  amountNear: string | null;
+  amountYocto: string | null;
+  currency: string;
+  reason: string;
+  ttlMinutes: number;
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+  rawPrompt: string;
+}
+

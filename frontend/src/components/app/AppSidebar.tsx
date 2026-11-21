@@ -10,6 +10,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Globe,
+  Layers,
 } from 'lucide-react';
 import { VAULT_CONTRACT_ID } from '../../types/contract';
 import { getExplorerAccountUrl } from '../../utils/formatters';
@@ -17,6 +18,7 @@ import { getExplorerAccountUrl } from '../../utils/formatters';
 export type AppPage =
   | 'overview'
   | 'vault'
+  | 'intents'
   | 'agents'
   | 'approvals'
   | 'transactions'
@@ -43,6 +45,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   const navItems = [
     { id: 'overview' as AppPage, label: 'Overview', icon: <LayoutDashboard className="w-4 h-4" /> },
     { id: 'vault' as AppPage, label: 'My Vault', icon: <Shield className="w-4 h-4" /> },
+    { id: 'intents' as AppPage, label: 'Intent Center', icon: <Layers className="w-4 h-4" /> },
     { id: 'agents' as AppPage, label: 'AI Agents', icon: <Bot className="w-4 h-4" /> },
     {
       id: 'approvals' as AppPage,

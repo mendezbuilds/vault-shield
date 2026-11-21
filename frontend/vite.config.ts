@@ -4,6 +4,8 @@ import { defineConfig, Plugin } from 'vite';
 import preflightHandler from './api/agent/preflight.ts';
 import executeHandler from './api/agent/execute.ts';
 import statusHandler from './api/agent/status.ts';
+import intentsHandler from './api/agent/intents.ts';
+import tokensHandler from './api/agent/tokens.ts';
 
 function nearTxBridgePlugin(): Plugin {
   // In-memory RPC response cache (TTL 3.5s) to eliminate duplicate burst queries
@@ -189,6 +191,14 @@ function nearTxBridgePlugin(): Plugin {
 
       server.middlewares.use('/api/agent/status', (req, res) => {
         statusHandler(req, res);
+      });
+
+      server.middlewares.use('/api/agent/intents', (req, res) => {
+        intentsHandler(req, res);
+      });
+
+      server.middlewares.use('/api/agent/tokens', (req, res) => {
+        tokensHandler(req, res);
       });
     }
   };

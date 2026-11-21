@@ -186,3 +186,77 @@ export interface ReconciliationResult {
   requestId?: number;
 }
 
+// -----------------------------------------------------------------------------
+// Intent Center & Persistent Queue Types
+// -----------------------------------------------------------------------------
+
+export const EXTERNAL_HANDOFF_WINDOW_MS = 300 * 1000; // 300 seconds (5 minutes)
+export const DEFAULT_VAULT_TTL_SECONDS = 3600; // 3,600 seconds (1 hour)
+
+export type IntentLifecycleStatus =
+  | 'RECEIVED'
+  | 'INGESTED'
+  | 'VALIDATING'
+  | 'PREFLIGHT'
+  | 'AWAITING_APPROVAL'
+  | 'DISPATCHED'
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'EXPIRED'
+  | 'HANDOFF_EXPIRED';
+
+export type IntentSource = 'DASHBOARD' | 'EXTERNAL_AGENT';
+
+export interface IntentAuditEntry {
+  timestamp: number;
+  status: IntentLifecycleStatus;
+  message: string;
+  details?: Record<string, any>;
+}
+
+export interface StoredIntent {
+  intentId: string;
+  source: IntentSource;
+  agentId?: string; // external agent ID/name or dashboard user
+  rawPrompt?: string; // original natural language text if submitted
+  destination: string;
+  amountNear: string;
+  amountYocto: string;
+  currency: string; // 'NEAR'
+  reason: string;
+  status: IntentLifecycleStatus;
+
+  // Two Different Expiry Windows (Requirement 6):
+  createdAt: number; // T0 when intent was created
+  handoffDeadline: number; // T0 + 300s (300,000 ms)
+  ingestedAt?: number; // timestamp when VaultAgent ingested the intent
+
+  vaultTtlSeconds: number; // Vault payment TTL (default 3600s, starts ONLY after acceptance)
+  vaultDeadline?: number; // acceptedAt + (vaultTtlSeconds * 1000)
+  acceptedAt?: number; // timestamp when VaultAgent accepted and submitted request
+
+  // Execution & Linking Details:
+  requestId?: number; // On-chain payment request ID if accepted
+  txHash?: string; // Transaction hash if broadcast or dry-run previewed
+  downstreamReceiptId?: string; // Downstream transfer receipt if confirmed
+  errorMessage?: string;
+  preflightResult?: PreflightResult;
+  attempts: number;
+  idempotencyKey?: string;
+
+  auditTrail: IntentAuditEntry[];
+}
+
+export interface AgentApiToken {
+  tokenId: string;
+  agentName: string;
+  tokenHash: string; // SHA-256 hash of the bearer token
+  tokenPrefix: string; // e.g. "vsa_live_abcd..." for identification
+  createdAt: number;
+  expiresAt?: number | null;
+  revoked: boolean;
+  revokedAt?: number | null;
+  permissions: string[];
+  rateLimitPerMin: number;
+}
+

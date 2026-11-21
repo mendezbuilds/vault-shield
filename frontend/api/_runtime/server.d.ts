@@ -1,5 +1,6 @@
 import http from 'http';
 import { AgentConfig } from './config.js';
+import { ContractViewProvider } from './preflight.js';
 export declare const DEFAULT_RUNTIME_PORT = 3888;
 export declare const RUNTIME_SECRET: string;
 export interface SigningServerOptions {
@@ -7,6 +8,7 @@ export interface SigningServerOptions {
     config?: Partial<AgentConfig>;
     secret?: string;
     rateLimitMaxRequests?: number;
+    viewProvider?: ContractViewProvider;
 }
 /**
  * Creates and starts the persistent server-side signing runtime for Vault Shield.

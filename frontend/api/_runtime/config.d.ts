@@ -17,6 +17,8 @@ export interface AgentConfig {
     geminiModel: string;
     signingRuntimeUrl: string;
     signingRuntimeSecret: string;
+    intentsPath: string;
+    apiTokensPath: string;
 }
 export declare const NEW_AGENT_RESTRICTED_PUBLIC_KEY = "ed25519:E1dDCJgqc7AEhM57PsmXzorNoVTiGBBUgWxHz35bvK24";
 export declare const LEGACY_RESTRICTED_PUBLIC_KEY = "ed25519:2H8EupC9ApTAPYPMu3a5DWxDdcX6X3wX22tcqsocV9Kq";

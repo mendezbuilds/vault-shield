@@ -65,6 +65,8 @@ export interface AgentConfig {
   geminiModel: string;
   signingRuntimeUrl: string;
   signingRuntimeSecret: string;
+  intentsPath: string;
+  apiTokensPath: string;
 }
 
 export const NEW_AGENT_RESTRICTED_PUBLIC_KEY = 'ed25519:E1dDCJgqc7AEhM57PsmXzorNoVTiGBBUgWxHz35bvK24';
@@ -118,9 +120,17 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   const defaultLockfilePath = isServerless
     ? path.resolve(defaultBaseDir, 'vault-agent.lock')
     : path.resolve(defaultBaseDir, '.agent.lock');
+  const defaultIntentsPath = isServerless
+    ? path.resolve(defaultBaseDir, 'vault-intents.json')
+    : path.resolve(defaultBaseDir, 'data', 'intents.json');
+  const defaultApiTokensPath = isServerless
+    ? path.resolve(defaultBaseDir, 'vault-api-tokens.json')
+    : path.resolve(defaultBaseDir, 'data', 'api_tokens.json');
 
   const ledgerPath = overrides.ledgerPath || process.env.AGENT_LEDGER_PATH || defaultLedgerPath;
   const lockfilePath = overrides.lockfilePath || process.env.AGENT_LOCKFILE_PATH || defaultLockfilePath;
+  const intentsPath = overrides.intentsPath || process.env.AGENT_INTENTS_PATH || defaultIntentsPath;
+  const apiTokensPath = overrides.apiTokensPath || process.env.AGENT_API_TOKENS_PATH || defaultApiTokensPath;
   const phase1StrictBoundary = overrides.phase1StrictBoundary !== undefined
     ? overrides.phase1StrictBoundary
     : process.env.AGENT_PHASE1_STRICT_BOUNDARY !== 'false';
@@ -151,6 +161,8 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     geminiModel,
     signingRuntimeUrl,
     signingRuntimeSecret,
+    intentsPath,
+    apiTokensPath,
   };
 }
 
