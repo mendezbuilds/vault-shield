@@ -1,4 +1,4 @@
-import { VaultAgent, parseNearToYocto } from '../_runtime/agent.js';
+import { VaultAgent, parseNearToYocto, formatYoctoToNear } from '../_runtime/agent.js';
 import { IntentQueue } from '../_runtime/intentQueue.js';
 import { ApiTokenManager } from '../_runtime/apiTokens.js';
 import { parseNaturalLanguageIntent } from '../_runtime/llm.js';
@@ -208,21 +208,45 @@ export default async function handler(req: any, res: any) {
       let reason = (body.reason || '').trim();
       let ttlMinutes = Number(body.ttlMinutes) || 60;
       const prompt = (body.prompt || body.naturalPrompt || '').trim();
-      const idempotencyKey = (body.idempotencyKey || req.headers['idempotency-key'] as string || '').trim();
+      let idempotencyKey = (body.idempotencyKey || body.nonce || req.headers['idempotency-key'] as string || '').trim();
       const processNow = body.processNow !== false;
+      let intentId = (body.intentId || body.approval_id || '').trim() || undefined;
+
+      // Auto-adapt from approval schema: { approval_id, amount, destination, nonce, expiry }
+      if (!amountNear && body.amount) {
+        const rawAmt = String(body.amount).trim();
+        if (/^\d{18,}$/.test(rawAmt)) {
+          try {
+            amountNear = formatYoctoToNear(rawAmt, 6).replace(/\.?0+$/, '');
+          } catch {
+            amountNear = rawAmt;
+          }
+        } else {
+          amountNear = rawAmt;
+        }
+      }
+
+      if (body.expiry && !body.ttlMinutes) {
+        try {
+          const expMs = new Date(body.expiry).getTime();
+          if (!isNaN(expMs) && expMs > Date.now()) {
+            ttlMinutes = Math.max(5, Math.min(1440, Math.round((expMs - Date.now()) / 60000)));
+          }
+        } catch {}
+      }
 
       if (prompt && (!destination || !amountNear)) {
         const parsed = parseNaturalLanguageIntent(prompt);
         if (parsed.destination && !destination) destination = parsed.destination;
         if (parsed.amountNear && !amountNear) amountNear = parsed.amountNear;
         if (!reason) reason = parsed.reason;
-        if (parsed.ttlMinutes && !body.ttlMinutes) ttlMinutes = parsed.ttlMinutes;
+        if (parsed.ttlMinutes && !body.ttlMinutes && !body.expiry) ttlMinutes = parsed.ttlMinutes;
       }
 
       if (!destination || !amountNear) {
         return sendJson(400, {
           success: false,
-          error: 'Missing required intent payload fields: destination and amountNear.',
+          error: 'Missing required intent payload fields: destination and amountNear (or amount).',
         });
       }
 
@@ -236,7 +260,7 @@ export default async function handler(req: any, res: any) {
         rawPrompt: prompt || undefined,
         idempotencyKey: idempotencyKey || undefined,
         createdAt: body.createdAt ? Number(body.createdAt) : undefined,
-        intentId: body.intentId,
+        intentId,
       });
 
       let finalIntent = submissionResult.intent;

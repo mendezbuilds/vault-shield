@@ -1,6 +1,6 @@
 import http from 'http';
 import { loadConfig, NEW_AGENT_RESTRICTED_PUBLIC_KEY, DEFAULT_CONTRACT_ID, DEFAULT_AGENT_ACCOUNT_ID, } from './config.js';
-import { VaultAgent, parseNearToYocto } from './agent.js';
+import { VaultAgent, parseNearToYocto, formatYoctoToNear } from './agent.js';
 import { generateIntentId } from './ledger.js';
 import { getEffectiveRuntimeSecret, validateRuntimeAuth, isOriginAllowed, RateLimiter, } from './auth.js';
 import { ApiTokenManager } from './apiTokens.js';
@@ -302,8 +302,33 @@ export function createSigningServer(options = {}) {
                 let reason = (body.reason || '').trim();
                 let ttlMinutes = Number(body.ttlMinutes) || 60;
                 const prompt = (body.prompt || body.naturalPrompt || '').trim();
-                const idempotencyKey = (body.idempotencyKey || req.headers['idempotency-key'] || '').trim();
+                let idempotencyKey = (body.idempotencyKey || body.nonce || req.headers['idempotency-key'] || '').trim();
                 const processNow = body.processNow !== false; // Default true: feed immediately into VaultAgent
+                let intentId = (body.intentId || body.approval_id || '').trim() || undefined;
+                // Auto-adapt from approval schema: { approval_id, amount, destination, nonce, expiry }
+                if (!amountNear && body.amount) {
+                    const rawAmt = String(body.amount).trim();
+                    if (/^\d{18,}$/.test(rawAmt)) {
+                        try {
+                            amountNear = formatYoctoToNear(rawAmt, 6).replace(/\.?0+$/, '');
+                        }
+                        catch {
+                            amountNear = rawAmt;
+                        }
+                    }
+                    else {
+                        amountNear = rawAmt;
+                    }
+                }
+                if (body.expiry && !body.ttlMinutes) {
+                    try {
+                        const expMs = new Date(body.expiry).getTime();
+                        if (!isNaN(expMs) && expMs > Date.now()) {
+                            ttlMinutes = Math.max(5, Math.min(1440, Math.round((expMs - Date.now()) / 60000)));
+                        }
+                    }
+                    catch { }
+                }
                 // If prompt provided and structured fields missing, parse prompt
                 if (prompt && (!destination || !amountNear)) {
                     const parsed = parseNaturalLanguageIntent(prompt);
@@ -313,13 +338,13 @@ export function createSigningServer(options = {}) {
                         amountNear = parsed.amountNear;
                     if (!reason)
                         reason = parsed.reason;
-                    if (parsed.ttlMinutes && !body.ttlMinutes)
+                    if (parsed.ttlMinutes && !body.ttlMinutes && !body.expiry)
                         ttlMinutes = parsed.ttlMinutes;
                 }
                 if (!destination || !amountNear) {
                     sendJson(400, {
                         success: false,
-                        error: 'Invalid intent payload: destination and amountNear are required.',
+                        error: 'Invalid intent payload: destination and amountNear (or amount) are required.',
                     });
                     return;
                 }
@@ -333,7 +358,7 @@ export function createSigningServer(options = {}) {
                     rawPrompt: prompt || undefined,
                     idempotencyKey: idempotencyKey || undefined,
                     createdAt: body.createdAt ? Number(body.createdAt) : undefined,
-                    intentId: body.intentId,
+                    intentId,
                 });
                 let finalIntent = submissionResult.intent;
                 // If not duplicate and requested to process immediately, feed into VaultAgent pipeline
