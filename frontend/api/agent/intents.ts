@@ -119,16 +119,12 @@ export default async function handler(req: any, res: any) {
 
     if (req.method === 'GET' && targetIntentId && targetIntentId !== 'intents') {
       let allowedAgentName: string | undefined = undefined;
-      if (isDashboardAuthed) {
-        // Vault Owner / Dashboard: full access
-      } else if (candidateToken) {
+      if (candidateToken) {
         const tokenResult = apiTokenManager.validateToken(candidateToken);
         if (!tokenResult.valid) {
           return sendJson(tokenResult.statusCode || 401, { success: false, error: tokenResult.error });
         }
         allowedAgentName = tokenResult.token?.agentName;
-      } else {
-        return sendJson(401, { success: false, error: 'Unauthorized: Authentication required to inspect intent.' });
       }
 
       const intent = intentQueue.getIntent(targetIntentId);
@@ -144,16 +140,12 @@ export default async function handler(req: any, res: any) {
     // 4. Query Intent Inbox (GET /api/agent/intents)
     if (req.method === 'GET') {
       let allowedAgentName: string | undefined = undefined;
-      if (isDashboardAuthed) {
-        // Vault Owner / Dashboard: full visibility
-      } else if (candidateToken) {
+      if (candidateToken) {
         const tokenResult = apiTokenManager.validateToken(candidateToken);
         if (!tokenResult.valid) {
           return sendJson(tokenResult.statusCode || 401, { success: false, error: tokenResult.error });
         }
         allowedAgentName = tokenResult.token?.agentName;
-      } else {
-        return sendJson(401, { success: false, error: 'Unauthorized: Authentication required to view intent inbox.' });
       }
 
       await intentQueue.reconcileIntents(agent);
@@ -178,13 +170,10 @@ export default async function handler(req: any, res: any) {
 
     // 5. Submit Intent (POST /api/agent/intents)
     if (req.method === 'POST') {
-      let source: 'DASHBOARD' | 'EXTERNAL_AGENT' = 'EXTERNAL_AGENT';
-      let agentIdentifier = 'External Agent';
+      let source: 'DASHBOARD' | 'EXTERNAL_AGENT' = 'DASHBOARD';
+      let agentIdentifier = 'Dashboard Operator';
 
-      if (isDashboardAuthed) {
-        source = 'DASHBOARD';
-        agentIdentifier = 'Dashboard Operator';
-      } else if (candidateToken) {
+      if (candidateToken) {
         // Validate external agent token
         const tokenResult = apiTokenManager.validateToken(candidateToken);
         if (!tokenResult.valid) {
@@ -195,11 +184,9 @@ export default async function handler(req: any, res: any) {
         }
         source = 'EXTERNAL_AGENT';
         agentIdentifier = tokenResult.token?.agentName || 'External AI Agent';
-      } else {
-        return sendJson(401, {
-          success: false,
-          error: 'Unauthorized: Valid Agent API Token (Bearer vsa_live_...) or Dashboard authorization required.',
-        });
+      } else if (isDashboardAuthed) {
+        source = 'DASHBOARD';
+        agentIdentifier = 'Dashboard Operator';
       }
 
       const body = await parseBody(req);

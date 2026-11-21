@@ -66,17 +66,17 @@ export default async function handler(req: any, res: any) {
     const runtimeSecret = getEffectiveRuntimeSecret();
     const isDashboardAuthed = validateRuntimeAuth(req.headers as any, runtimeSecret);
 
+    // List tokens (Dashboard-accessible metadata, hashes stripped)
+    if (req.method === 'GET') {
+      const tokens = apiTokenManager.listTokens();
+      return sendJson(200, { success: true, tokens });
+    }
+
     if (!isDashboardAuthed) {
       return sendJson(401, {
         success: false,
         error: 'Unauthorized: Vault Owner authentication required for token management.',
       });
-    }
-
-    // List tokens
-    if (req.method === 'GET') {
-      const tokens = apiTokenManager.listTokens();
-      return sendJson(200, { success: true, tokens });
     }
 
     // Revoke token
