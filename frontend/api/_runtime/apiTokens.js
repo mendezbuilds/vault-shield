@@ -69,25 +69,42 @@ export class ApiTokenManager {
      * Bootstrap token: "vsa_live_demo_external_agent_token_2026_sec"
      */
     ensureBootstrapTokens() {
-        const demoToken = 'vsa_live_demo_external_agent_token_2026_sec';
-        const demoHash = this.hashToken(demoToken);
-        const existing = Array.from(this.tokens.values()).find(t => t.tokenHash === demoHash);
-        if (!existing) {
-            const tokenId = 'tok_bootstrap_agent_01';
-            this.tokens.set(tokenId, {
-                tokenId,
+        const bootstrapTokens = [
+            {
+                tokenId: 'tok_bootstrap_agent_01',
+                token: 'vsa_live_demo_external_agent_token_2026_sec',
                 agentName: 'Verified External AI Agent (Autonomous Worker)',
-                tokenHash: demoHash,
                 tokenPrefix: 'vsa_live_demo..._sec',
-                createdAt: 1731175200000,
-                expiresAt: null,
-                revoked: false,
-                revokedAt: null,
-                permissions: ['submit_intent', 'query_intent'],
-                rateLimitPerMin: 60,
-            });
-            this.save();
+            },
+            {
+                tokenId: 'tok_bootstrap_agent_cleartoad',
+                token: 'vsa_live_agent_cleartoad8704_sec_99182a',
+                agentName: 'agent.cleartoad8704.testnet',
+                tokenPrefix: 'vsa_live_cleartoad..._sec',
+            },
+        ];
+        let mutated = false;
+        for (const b of bootstrapTokens) {
+            const hash = this.hashToken(b.token);
+            const existing = Array.from(this.tokens.values()).find(t => t.tokenHash === hash);
+            if (!existing) {
+                this.tokens.set(b.tokenId, {
+                    tokenId: b.tokenId,
+                    agentName: b.agentName,
+                    tokenHash: hash,
+                    tokenPrefix: b.tokenPrefix,
+                    createdAt: 1731175200000,
+                    expiresAt: null,
+                    revoked: false,
+                    revokedAt: null,
+                    permissions: ['submit_intent', 'query_intent'],
+                    rateLimitPerMin: 60,
+                });
+                mutated = true;
+            }
         }
+        if (mutated)
+            this.save();
     }
     /**
      * Generates a new cryptographic API token for an external agent.
